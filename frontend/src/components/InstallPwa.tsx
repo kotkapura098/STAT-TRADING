@@ -40,7 +40,7 @@ export function InstallPwaButton() {
     window.addEventListener("appinstalled", () => {
       setDeferredPrompt(null);
       setIsStandalone(true);
-      toast("Punjab AI App installed successfully! You can now launch it from your home screen / desktop.", "ok");
+      toast("Golden Eagle Trades App installed successfully! You can now launch it from your home screen / desktop.", "ok");
     });
 
     return () => {
@@ -62,7 +62,7 @@ export function InstallPwaButton() {
     } else if (isIos) {
       setShowIosGuide(true);
     } else {
-      toast("To install Punjab AI: click the install icon (🖥️ / ➕) in your browser address bar or menu.", "info");
+      toast("To install Golden Eagle Trades: click the install icon (🖥️ / ➕) in your browser address bar or menu.", "info");
     }
   }
 
@@ -71,7 +71,7 @@ export function InstallPwaButton() {
       <button
         className="btn ghost sm pwa-install-btn"
         onClick={handleInstall}
-        title="Install Punjab AI as a standalone desktop/mobile app"
+        title="Install Golden Eagle Trades as a standalone desktop/mobile app"
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -120,7 +120,7 @@ export function InstallPwaButton() {
           >
             <h3 style={{ margin: "0 0 12px 0", fontSize: "17px", fontWeight: 600 }}>Install on iPhone / iPad</h3>
             <p style={{ fontSize: "14px", lineHeight: "1.5", color: "var(--muted, #8b949e)", margin: "0 0 16px 0" }}>
-              To install Punjab AI as an app on iOS:
+              To install Golden Eagle Trades as an app on iOS:
             </p>
             <ol style={{ fontSize: "14px", lineHeight: "1.6", margin: "0 0 20px 0", paddingLeft: "20px" }}>
               <li>Tap the <b>Share</b> button <span style={{ fontSize: "16px" }}>􀈂</span> (bottom of Safari)</li>
