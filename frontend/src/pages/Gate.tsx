@@ -30,7 +30,7 @@ export function LoginPage() {
       <form className="panel gate-card" onSubmit={submit}>
         <div className="brand">
           <Logo size={44} />
-          <span>PUNJAB AI</span>
+          <span>Golden Eagle Trades</span>
         </div>
         <div>
           <h1>Log in</h1>
