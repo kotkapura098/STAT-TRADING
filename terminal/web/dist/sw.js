@@ -1,4 +1,4 @@
-// PUNJAB AI Clean Service Worker (Pass-through with no fetch interception)
+// Golden Eagle Trades Clean Service Worker (Pass-through with no fetch interception)
 self.addEventListener("install", () => {
   self.skipWaiting();
 });

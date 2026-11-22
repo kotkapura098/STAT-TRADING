@@ -150,7 +150,7 @@ export function Shell({ path, children }: { path: string; children: ReactNode })
       {!phone && <nav className="rail" aria-label="Main">
         <a className="brand" href="/" onClick={(e) => { e.preventDefault(); navigate("/"); }}>
           <Logo />
-          <span>PUNJAB AI</span>
+          <span>Golden Eagle Trades</span>
         </a>
         {NAV.map((g) => (
           <div key={g.group} style={{ display: "contents" }}>
@@ -188,7 +188,7 @@ export function Shell({ path, children }: { path: string; children: ReactNode })
           {phone ? (
             <div className="mobile-brand" onClick={() => navigate("/")} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", flex: "none" }}>
               <Logo />
-              <b style={{ fontSize: "14px", letterSpacing: "0.02em" }}>PUNJAB AI</b>
+              <b style={{ fontSize: "14px", letterSpacing: "0.02em" }}>Golden Eagle Trades</b>
             </div>
           ) : (
             <div className="tape" aria-label="Index prices">
