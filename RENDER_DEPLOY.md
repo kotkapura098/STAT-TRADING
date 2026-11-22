@@ -1,4 +1,4 @@
-# Deploying Punjab AI Terminal to Render (24/7)
+# Deploying Golden Eagle Trades Terminal to Render (24/7)
 
 This guide walks you through deploying your terminal live 24/7 on [Render](https://render.com).
 
@@ -40,7 +40,7 @@ If you prefer setting up the Web Service manually:
 2. Connect your Git repository.
 3. Choose **Docker** as the Environment.
 4. Set:
-   - **Name**: `punjab-ai-terminal`
+   - **Name**: `golden-eagle-trades-terminal`
    - **Region**: `Singapore`
    - **Branch**: `main`
    - **Dockerfile Path**: `./Dockerfile`
