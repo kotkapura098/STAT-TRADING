@@ -40,7 +40,7 @@ If you prefer setting up the Web Service manually:
 2. Connect your Git repository.
 3. Choose **Docker** as the Environment.
 4. Set:
-   - **Name**: `golden-eagle-trades-terminal`
+   - **Name**: `punjab-ai-terminal`
    - **Region**: `Singapore`
    - **Branch**: `main`
    - **Dockerfile Path**: `./Dockerfile`
