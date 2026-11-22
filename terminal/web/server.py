@@ -165,7 +165,7 @@ def create_app(svc: Services, password: str) -> FastAPI:
     if len(password) < 8:
         raise RuntimeError("DASHBOARD_PASSWORD must be set in .env and be at least 8 characters")
     svc.vault.unlock(password)
-    app = FastAPI(title="PUNJAB AI", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="Golden Eagle Trades", docs_url=None, redoc_url=None, openapi_url=None)
     sessions: dict[str, float] = {}
     fails: dict[str, list[float]] = {}
     recent_orders: dict[str, tuple[float, dict]] = {}
