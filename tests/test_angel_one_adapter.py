@@ -143,3 +143,18 @@ def test_angel_catalog_search_returns_only_matching_live_contracts():
     ins._loaded_at = 9999999999
     hits = AngelOneCatalog(ins).search("NIFTY CE")
     assert [x.token for x in hits] == ["1"]
+
+
+def test_index_subscription_accepts_strategy_underlying_alias():
+    cfg = SimpleNamespace(dashboard_indices=[
+        {"label": "NIFTY 50", "segment": "nse_cm", "token": "Nifty 50"}
+    ])
+    ins = AngelOneInstruments(SimpleNamespace(), cfg)
+    ins._rows = [{
+        "exch_seg": "NSE", "instrumenttype": "AMXIDX",
+        "token": "99926000", "symbol": "Nifty 50", "name": "NIFTY"
+    }]
+    ins._by_key = {"nse_cm|99926000": ins._rows[0]}
+    ins._loaded_at = 9999999999
+    sub = ins.index_subscription("NIFTY")
+    assert (sub.segment, sub.token, sub.symbol) == ("nse_cm", "99926000", "INDEX")
