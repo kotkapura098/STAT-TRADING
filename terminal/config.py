@@ -89,7 +89,7 @@ class Config:
     demo_scenario: str = "put_sell"   # sample mode: which synthetic day the "Run demo" button replays
     poll_interval_s: float = 0.5
     mcx_close_time: str = ""          # commodities: "" = automatic by season (23:30 in US summer time, 23:55 in winter); or "HH:MM"
-    static_ip: str = ""               # live only: the static IP you registered with Kotak; refuse to start if different
+    static_ip: str = ""               # live only: the static IP you registered with Angel One; refuse to start if different
     data_dir: str = "data"
     log_dir: str = "logs"
     host: str = "127.0.0.1"
