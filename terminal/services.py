@@ -374,7 +374,7 @@ class Services:
                 self.store.set("accounts.last", aid)
                 self._start_journal_loop()
                 log.info("Connected to Angel One in %s mode", self.mode)
-            except Exception:
+            except Exception as exc:
                 if feed is not None:
                     try:
                         feed.stop()
@@ -390,7 +390,11 @@ class Services:
                 self.accounts.clear()
                 self.active_account_id = ""
                 self.connected = False
-                raise
+                message = str(exc)
+                for secret in creds.values():
+                    if secret and len(secret) >= 4:
+                        message = message.replace(secret, "••••")
+                raise RuntimeError(message[:300]) from None
 
     # ------------------------------------------------------------------ paper <-> real switch
     def _localhost(self) -> bool:
