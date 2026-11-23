@@ -530,12 +530,35 @@ class AngelOneOrders:
     def __init__(self, session: AngelOneSession, instruments: AngelOneInstruments, cfg=None, ip_check=None):
         self.session, self.instruments, self.cfg = session, instruments, cfg
         self.ip_check = ip_check
+        self._unique_order_ids: dict[str, str] = {}
 
     def _ensure_order_ip(self) -> None:
         if self.ip_check:
             problem = self.ip_check()
             if problem:
                 raise OrderError("Angel One order action blocked: " + str(problem))
+        _ANGEL_ORDER_MUTATIONS.acquire()
+
+    def _remember_order_ids(self, row: Any) -> None:
+        if not isinstance(row, dict):
+            return
+        order_id = str(row.get("orderid") or row.get("order_id") or "").strip()
+        unique_id = str(row.get("uniqueorderid") or row.get("unique_order_id") or "").strip()
+        if order_id and unique_id:
+            self._unique_order_ids[order_id] = unique_id
+
+    @staticmethod
+    def _status_from_row(order_id: str, row: dict) -> OrderStatus:
+        raw = str(row.get("orderstatus") or row.get("status") or "").strip().upper().replace("_", " ")
+        state = {"COMPLETE": "COMPLETE", "OPEN": "OPEN", "PENDING": "OPEN",
+                 "TRIGGER PENDING": "TRIGGER_PENDING", "PARTIALLY EXECUTED": "OPEN",
+                 "PARTIALLY FILLED": "OPEN", "MODIFY PENDING": "OPEN",
+                 "AMO REQ RECEIVED": "OPEN", "REJECTED": "REJECTED",
+                 "CANCELLED": "CANCELLED", "CANCELED": "CANCELLED"}.get(raw, "UNKNOWN")
+        return OrderStatus(str(order_id), state,
+                           int(_num(row.get("filledshares") or row.get("filledsharesqty") or row.get("filledquantity"))),
+                           _num(row.get("averageprice") or row.get("average_price") or row.get("avgprice")),
+                           str(row.get("text") or row.get("rejreason") or row.get("reason") or ""))
 
     def place(self, req: OrderRequest) -> str:
         self._ensure_order_ip()
@@ -569,6 +592,7 @@ class AngelOneOrders:
             order_id = data.get("orderid") or data.get("order_id")
             if not order_id:
                 raise OrderUnknown("Angel One returned no order id; check the order book before retrying.")
+            self._remember_order_ids(data)
             return str(order_id)
         response = client.placeOrder(payload)
         if isinstance(response, (str, int)) and str(response).strip():
@@ -577,13 +601,14 @@ class AngelOneOrders:
             data = _ok(response, "place order")
             order_id = data.get("orderid") or data.get("order_id")
             if order_id:
+                self._remember_order_ids(data)
                 return str(order_id)
         raise OrderUnknown("Angel One placeOrder returned no order id; check the order book before retrying.")
 
     def cancel(self, order_id: str) -> None:
         self._ensure_order_ip()
         response = self.session.require_client().cancelOrder(order_id, "NORMAL")
-        _ok(response, "cancel order")
+        self._remember_order_ids(_ok(response, "cancel order"))
 
     def modify(self, order_id: str, payload: dict) -> None:
         """Modify using the SmartAPI SDK's required orderid-bearing payload."""
@@ -592,7 +617,7 @@ class AngelOneOrders:
             raise OrderError("Angel One modify requires a complete payload containing orderid.")
         if str(payload["orderid"]) != str(order_id):
             raise OrderError("Modify payload orderid does not match the requested order.")
-        _ok(self.session.require_client().modifyOrder(payload), "modify order")
+        self._remember_order_ids(_ok(self.session.require_client().modifyOrder(payload), "modify order"))
 
     @staticmethod
     def _list_data(response: Any, action: str) -> list[dict]:
@@ -606,9 +631,14 @@ class AngelOneOrders:
         return [r for r in rows if isinstance(r, dict)]
 
     def order_book(self) -> list[dict]:
-        return self._list_data(self.session.require_client().orderBook(), "order book")
+        _ANGEL_ORDER_BOOK.acquire()
+        rows = self._list_data(self.session.require_client().orderBook(), "order book")
+        for row in rows:
+            self._remember_order_ids(row)
+        return rows
 
     def trade_book(self) -> list[dict]:
+        _ANGEL_TRADE_BOOK.acquire()
         client = self.session.require_client()
         method = getattr(client, "tradeBook", None) or getattr(client, "tradebook", None)
         if method is None:
@@ -616,18 +646,31 @@ class AngelOneOrders:
         return self._list_data(method(), "trade book")
 
     def status(self, order_id: str) -> OrderStatus:
+        order_id = str(order_id)
+        unique_id = self._unique_order_ids.get(order_id)
+        client = self.session.require_client()
+        details = getattr(client, "individual_order_details", None)
+        if unique_id and callable(details):
+            try:
+                _ANGEL_INDIVIDUAL_STATUS.acquire()
+                response = details(unique_id)
+                data = _ok(response, "individual order details")
+                row = data.get("data") if isinstance(data, dict) and isinstance(data.get("data"), dict) else data
+                if isinstance(row, list):
+                    row = row[0] if row else None
+                if isinstance(row, dict):
+                    self._remember_order_ids(row)
+                    return self._status_from_row(order_id, row)
+                return OrderStatus(order_id, "UNKNOWN", reason="Angel One returned unreadable individual order details.")
+            except Exception as exc:
+                logger.warning("Angel One individual order status lookup failed (%s).", type(exc).__name__)
+                return OrderStatus(order_id, "UNKNOWN", reason="Angel One individual order status is temporarily unavailable.")
         rows = self.order_book()
-        row = next((x for x in rows if str(x.get("orderid") or x.get("order_id")) == str(order_id)), None)
+        row = next((x for x in rows if str(x.get("orderid") or x.get("order_id")) == order_id), None)
         if row is None:
-            return OrderStatus(str(order_id), "UNKNOWN", reason="Order not present in Angel One order book.")
-        raw = str(row.get("orderstatus") or row.get("status") or "").strip().upper().replace("_", " ")
-        state = {"COMPLETE": "COMPLETE", "OPEN": "OPEN", "PENDING": "OPEN",
-                 "TRIGGER PENDING": "TRIGGER_PENDING", "PARTIALLY EXECUTED": "OPEN", "PARTIALLY FILLED": "OPEN", "MODIFY PENDING": "OPEN", "AMO REQ RECEIVED": "OPEN", "REJECTED": "REJECTED",
-                 "CANCELLED": "CANCELLED", "CANCELED": "CANCELLED"}.get(raw, "UNKNOWN")
-        return OrderStatus(str(order_id), state,
-                           int(_num(row.get("filledshares") or row.get("filledsharesqty"))),
-                           _num(row.get("averageprice") or row.get("average_price")),
-                           str(row.get("text") or row.get("rejreason") or ""))
+            return OrderStatus(order_id, "UNKNOWN", reason="Order not present in Angel One order book.")
+        self._remember_order_ids(row)
+        return self._status_from_row(order_id, row)
 
     def positions(self) -> dict[str, int] | None:
         rows = self._list_data(self.session.require_client().position(), "positions")
