@@ -34,7 +34,7 @@ class Controller:
             if self.engine and not self.engine.finished.is_set():
                 raise RuntimeError("A session is already running")
             if not self.logged_in:
-                raise RuntimeError("Log in to Kotak first")
+                raise RuntimeError("Connect your Angel One account first")
             if self.needs_login:
                 problem = self._ip_check(getattr(self.session, "my_ip", None))
                 if problem:
