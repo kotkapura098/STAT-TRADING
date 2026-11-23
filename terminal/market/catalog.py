@@ -10,7 +10,24 @@ import threading
 from datetime import date
 from typing import Any
 
-from ..brokers.kotak import _f, parse_expiry
+import math
+
+def _f(value, default=0.0):
+    try:
+        number = float(value)
+        return number if math.isfinite(number) else default
+    except (TypeError, ValueError):
+        return default
+
+def parse_expiry(value, today=None, segment=None):
+    from datetime import datetime
+    raw = str(value or "").strip().upper()
+    for fmt in ("%d%b%Y", "%d-%b-%Y", "%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    return None
 from ..clock import now_ist
 from . import commodity as cm
 from .models import Instrument
