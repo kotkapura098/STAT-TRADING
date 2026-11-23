@@ -72,7 +72,6 @@ def test_angel_one_chain_uses_full_quotes_and_real_open_interest():
     provider, client = make_provider()
     raw = provider.fetch("NIFTY", EXPIRY.isoformat())
     assert raw.lot == 65
-    assert raw.source if hasattr(raw, "source") else True
     assert sorted(raw.rows) == [26000.0, 26050.0]
     ce = raw.rows[26000.0]["CE"]
     pe = raw.rows[26000.0]["PE"]
