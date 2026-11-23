@@ -98,11 +98,12 @@ class Services:
             all_gateways_provider=lambda: self.gateways,
             account_labels_provider=lambda: {aid: a.get("label", aid) for aid, a in self.accounts.items()})
         if self.mode != "sample":
-            from .brokers.kotak import KotakInstruments, KotakSession
-            self._default_session = KotakSession(env)
-            self._kotak_ins = KotakInstruments(self._default_session, cfg)
+            from .brokers.angel_one import AngelOneInstruments, AngelOneSession
+            self._default_session = AngelOneSession(env)
+            self._angel_ins = AngelOneInstruments(self._default_session, cfg)
         else:
             self._default_session = None
+            self._angel_ins = None
         self.algo = Controller(cfg, self._build_engine, self.session, ip_check=self._ip_problem)
         self.rules = RuleEngine(self.store, HubMarket(self.hub, self.chain, self.catalog), self.trading, cfg.data_dir, notify=self.alerts.notify)
         self.rules.attach(self.hub)
@@ -217,8 +218,7 @@ class Services:
             else:
                 out.append({"label": label, "key": f"mcx_fo|{name}", "name": name, "contract": f"{label} FUT",
                             "expiry": None})
-        if out and self.catalog.mcx_loaded():
-            self._cm_cards = (day, out)
+        if out and self.catalog.mcx_loaded():            self._cm_cards = (day, out)
         return out
 
     def start(self) -> None:
@@ -322,80 +322,75 @@ class Services:
         threading.Thread(target=loop, name="ip-monitor", daemon=True).start()
 
     def connect(self, totp: str | None, account_id: str = "", confirm_live: bool = False) -> None:
-        """Kotak login (paper/live) as one of the saved accounts, and start of the real feed. Safe to call again after a failed attempt."""
+        """Connect the one configured Angel One account and start its shared market feed."""
         if self.mode == "sample":
             return
-        from .brokers.kotak import KotakFeed
-        from .market.catalog import KotakCatalog
-        from .trading.kotak_gateway import KotakGateway
+        from .brokers.angel_one import AngelOneFeed, AngelOneInstruments, AngelOneSession
+        from .market.angel_catalog import AngelOneCatalog
+        from .market.models import Quote
+        from .trading.angel_gateway import AngelOneGateway
+
         with self._connect_lock:
-            aid = account_id or self.vault.default_id()
-            if not aid:
-                raise RuntimeError("No account to connect. Add one under Settings, in the Accounts box, or fill in the .env file.")
-            if aid in self.accounts:
-                log.info("Account '%s' is already connected", aid)
+            aid = "angel-one"
+            if self.connected:
                 return
-            acct = self.vault.get(aid)
             if self.mode == "live" and not confirm_live:
-                raise RuntimeError(f"LIVE mode: confirm that orders may be REAL on the account '{acct['label']}'.")
+                raise RuntimeError("LIVE mode: explicitly confirm that orders may be REAL on your Angel One account.")
             n, last = self._fails.get(aid, (0, 0.0))
             if n >= 3 and time.time() - last < 90:
-                raise RuntimeError(f"Three login attempts in a row failed for '{acct['label']}'. Wait a minute and check the details first: "
-                                   f"Kotak can lock the MPIN after repeated wrong attempts.")
-            creds = self.vault.creds(aid)
-            from .brokers.kotak import KotakInstruments, KotakSession
-            sess = KotakSession(creds)
+                raise RuntimeError("Three Angel One login attempts failed. Wait 90 seconds and verify API key, client code, PIN and TOTP.")
+            sess = self._default_session or AngelOneSession(self.env)
             try:
                 sess.login(totp)
-            except Exception as e:
-                self._fails[aid] = (n + 1, time.time())
-                msg = scrub(str(e), creds)
-                if n + 1 >= 2 and "TOTP" not in msg[:12]:
-                    msg += " (Kotak can lock the MPIN after repeated wrong attempts: check the details before trying again.)"
-                raise RuntimeError(msg) from None
-            self._fails.pop(aid, None)
-            seen = sess.my_ip
-            problem = self.netip.problem_for(seen, acct.get("static_ip", ""), self.cfg.static_ip, acct["label"]) if self.mode == "live" else None
-            if problem:
-                sess.logout()
-                raise RuntimeError(problem)
-
-            if not self.feed:
-                self._kotak_ins = KotakInstruments(self.get_valid_kotak_session, self.cfg)
-                cat = KotakCatalog(self._kotak_ins)
-                for c in self.index_cards():
-                    seg, tok = c["key"].split("|", 1)
-                    cat.register(Instrument(c["key"], seg, tok, c["label"], c["label"], "INDEX", tick=0.05))
+                ins = AngelOneInstruments(sess, self.cfg)
+                cat = AngelOneCatalog(ins, self.cfg)
+                cat.warm()
+                resolved = []
+                for item in self._indices:
+                    sub = ins.index_subscription(item["label"])
+                    item = dict(item)
+                    item["segment"], item["token"] = sub.segment, sub.token
+                    resolved.append(item)
+                self._indices = resolved
+                self._angel_ins = ins
                 self.catalog.set(cat)
-                feed = KotakFeed(self.get_valid_kotak_session, self.cfg)
-                feed.on_quote = self.hub.update
-                feed.start(lambda t: None)
+                feed = AngelOneFeed(sess, self.cfg)
+                feed.start(lambda tick: self.hub.update(Quote(tick.symbol, tick.price, ts=tick.ts.timestamp())))
                 self.feed = feed
                 self.hub.attach_feed(feed)
                 self.hub.want("dashboard", [c["key"] for c in self.index_cards()])
-                from .market.chain import KotakChainProvider
-                self.chain.set_provider(KotakChainProvider(self.get_valid_kotak_session, self.catalog))
                 self._seed_defaults()
                 self.charts.start()
+                gw = (AngelOneGateway(sess, ins, self.catalog, self.hub, self.cfg)
+                      if self.mode == "live" else
+                      SimBroker(self.hub, self.catalog, self.cfg.manual.paper_capital, self.cfg.data_dir))
+            except Exception as exc:
+                self._fails[aid] = (n + 1, time.time())
+                try:
+                    if self.feed:
+                        self.feed.stop()
+                except Exception:
+                    log.exception("failed to stop Angel One feed after login error")
+                self.feed = None
+                try:
+                    sess.logout()
+                except Exception:
+                    pass
+                raise RuntimeError(str(exc)[:240]) from None
 
-            if self.mode == "live":
-                from .trading.kotak_gateway import KotakGateway
-                gw = KotakGateway(sess, self.catalog, self.hub)
-            else:
-                gw = SimBroker(self.hub, self.catalog, self.cfg.manual.paper_capital, self.cfg.data_dir)
-
+            self._fails.pop(aid, None)
             self.sessions[aid] = sess
             self.gateways[aid] = gw
-            self.accounts[aid] = {"id": aid, "label": acct["label"], "ucc": acct["ucc"][:1] + "•••" + acct["ucc"][-2:]}
-            if not self.active_account_id:
-                self.active_account_id = aid
+            profile = getattr(sess, "profile", {}) or {}
+            client_code = str(profile.get("clientcode") or profile.get("clientCode") or sess.client_code)
+            masked = client_code[:1] + "•••" + client_code[-2:] if len(client_code) > 3 else "••••"
+            self.accounts[aid] = {"id": aid, "label": "Angel One", "ucc": masked}
+            self.active_account_id = aid
             self.connected = True
-            from .market.chain import KotakChainProvider
-            self.chain.set_provider(KotakChainProvider(self.get_valid_kotak_session, self.catalog))
-            self.journal.ns = self.vault.journal_namespace(aid, self.mode)
+            self.journal.ns = f"angel-one:{self.mode}"
             self.store.set("accounts.last", aid)
             self._start_journal_loop()
-            log.info("connected to Kotak as '%s' in %s mode (total %d accounts connected)", acct["label"], self.mode, len(self.accounts))
+            log.info("connected to Angel One in %s mode", self.mode)
 
     # ------------------------------------------------------------------ paper <-> real switch
     def _localhost(self) -> bool:
@@ -424,7 +419,7 @@ class Services:
     def _leave_sample(self, mode: str) -> None:
         """Turn the invented-data demo into a paper / real terminal: stop the sample world, forget everything it made up,
         and wait for the Kotak login. Nothing invented stays behind on screen or in the saved price history."""
-        from .brokers.kotak import KotakInstruments, KotakSession
+        from .brokers.angel_one import AngelOneInstruments, AngelOneSession
         feed = self.feed
         if feed is not None:
             feed.stop()
@@ -437,16 +432,15 @@ class Services:
         self.charts.forget_recent()
         self.chain.set_provider(None)
         self.chain._last_series.clear()
-        self.catalog.set(None)
-        self.gateway = None
+        self.catalog.set(None)        self.gateway = None
         self.connected = False
         self.account = None
         self.journal.ns = None
         self.trading._pos_keys = set()
         self.store.drop_derivative_items()
-        self.session = KotakSession(self.env)
-        self._kotak_ins = KotakInstruments(self.session, self.cfg)
-        self.algo.session = self.session
+        self._default_session = AngelOneSession(self.env)
+        self._angel_ins = AngelOneInstruments(self._default_session, self.cfg)
+        self.algo.session = self._default_session
         self.bt_src = "market"
         if self.recorder is None:
             self.recorder = Recorder(self.history, self.catalog, self.bt_src)
@@ -457,8 +451,8 @@ class Services:
         self.alerts.mode = mode
         self.journal.mode = mode
         self._start_ip_monitor()
-        log.warning("left the sample world: now in %s mode, waiting for the Kotak login", mode)
-        self.alerts.notify("info", f"Trading mode is now {'REAL: orders go to your Kotak account' if mode == 'live' else 'PAPER: simulated orders'} (waiting for the Kotak login).")
+        log.warning("left the sample world: now in %s mode, waiting for Angel One login", mode)
+        self.alerts.notify("info", f"Trading mode is now {'REAL: orders go to your Angel One account' if mode == 'live' else 'PAPER: simulated orders'} (waiting for the Angel One login).")
 
     def _open_exposure(self) -> bool:
         """True when the broker side has open positions or live orders (used before leaving real trading)."""
@@ -473,7 +467,7 @@ class Services:
     def set_mode(self, mode: str, confirm: str = "") -> dict:
         """Switch the whole terminal between paper (real prices, simulated orders) and real trading, without a new login.
         The choice is for this run only: after a restart the terminal starts in the mode set in config.yaml / --mode."""
-        from .trading.kotak_gateway import KotakGateway
+        from .trading.angel_gateway import AngelOneGateway
         if mode not in ("paper", "live"):
             raise RuntimeError("Choose paper or real trading.")
         with self._connect_lock:
@@ -491,12 +485,9 @@ class Services:
                 except Exception:
                     log.exception("journal sync before mode switch")
                 if mode == "live":
-                    acct = self.vault.get(self.account["id"]) if self.account else {}
-                    problem = self.netip.problem_for(self.session.my_ip, acct.get("static_ip", ""), self.cfg.static_ip,
-                                                     self.account["label"] if self.account else "")
-                    if problem:
-                        raise RuntimeError(problem)
-                    gateway = KotakGateway(self.session, self.catalog, self.hub)
+                    if not self.session or not getattr(self.session, "logged_in", False):
+                        raise RuntimeError("Connect your Angel One account before enabling live orders.")
+                    gateway = AngelOneGateway(self.session, self._angel_ins, self.catalog, self.hub, self.cfg)
                 else:
                     gateway = SimBroker(self.hub, self.catalog, self.cfg.manual.paper_capital, self.cfg.data_dir)
             old = self.mode
@@ -507,15 +498,14 @@ class Services:
                 self.gateway = gateway
                 self.journal.ns = self.vault.journal_namespace(self.account["id"], mode)
             log.warning("trading mode switched %s -> %s", old, mode)
-            self.alerts.notify("info", f"Trading mode is now {'REAL: orders go to your Kotak account' if mode == 'live' else 'PAPER: simulated orders'}.")
+            self.alerts.notify("info", f"Trading mode is now {'REAL: orders go to your Angel One account' if mode == 'live' else 'PAPER: simulated orders'}.")
             return self.mode_info()
 
     def disconnect(self, account_id: str | None = None) -> None:
-        """Log out of Kotak so account(s) can be disconnected. Refused while anything is trading."""
         if self.mode == "sample":
             raise RuntimeError("Sample mode has no broker account.")
         with self._connect_lock:
-            if not self.connected and not self.accounts:
+            if not self.connected:
                 return
             if self.rules.running():
                 raise RuntimeError("Stop your running strategies first (My strategies), then disconnect.")
@@ -525,37 +515,25 @@ class Services:
                 self.journal.sync()
             except Exception:
                 log.exception("journal sync before disconnect")
-
-            target_aids = [account_id] if account_id and account_id in self.accounts else list(self.accounts.keys())
-            for aid in target_aids:
-                sess = self.sessions.pop(aid, None)
-                self.gateways.pop(aid, None)
-                acct_info = self.accounts.pop(aid, None)
-                lbl = acct_info.get("label", aid) if acct_info else aid
+            try:
+                if self.feed:
+                    self.feed.stop()
+            finally:
+                sess = self.sessions.pop("angel-one", None)
+                self.gateways.clear()
+                self.accounts.clear()
+                self.active_account_id = ""
+                self.connected = False
+                self.feed = None
+                self.journal.ns = None
+                self.chain.set_provider(None)
+                self.hub.reset()
                 if sess:
                     try:
                         sess.logout()
                     except Exception:
-                        log.exception("logout %s", lbl)
-                log.info("disconnected from Kotak ('%s')", lbl)
-
-            if not self.accounts:
-                try:
-                    if self.feed:
-                        self.feed.stop()
-                except Exception:
-                    log.exception("feed stop")
-                self.connected = False
-                self.feed = None
-                self.active_account_id = ""
-                self.journal.ns = None
-                self.chain.set_provider(None)
-            else:
-                if self.active_account_id not in self.accounts:
-                    self.active_account_id = next(iter(self.accounts.keys()))
-                self.connected = True
-                from .market.chain import KotakChainProvider
-                self.chain.set_provider(KotakChainProvider(self.get_valid_kotak_session, self.catalog))
+                        log.exception("Angel One logout")
+                log.info("disconnected from Angel One")
 
     def shutdown(self) -> None:
         self._stopping.set()
@@ -572,7 +550,7 @@ class Services:
         try:
             if self.feed:
                 self.feed.stop()
-            if self.session and self.session.logged_in:
+            if self.session and getattr(self.session, "logged_in", False):
                 self.session.logout()
         except Exception:
             log.exception("shutdown")
@@ -597,9 +575,11 @@ class Services:
             ecfg.strategy = dataclasses.replace(cfg.strategy, strike_window=min(cfg.strategy.strike_window, 3))
             return Engine(ecfg, SyntheticInstruments(ecfg, day),
                           ReplayFeed(build_day(day, cfg.demo_scenario, underlying=cfg.inst.underlying)), PaperOrders())
-        from .brokers.kotak import KotakOrders
-        orders = PaperOrders() if self.mode == "paper" else KotakOrders(self.session, cfg)
-        eng = Engine(cfg, self._kotak_ins, HubEngineFeed(self.hub), orders)
+        from .brokers.angel_one import AngelOneOrders
+        if not self._angel_ins or not self.session or not getattr(self.session, "logged_in", False):
+            raise RuntimeError("Connect the Angel One account before starting the strategy engine.")
+        orders = PaperOrders() if self.mode == "paper" else AngelOneOrders(self.session, self._angel_ins, cfg)
+        eng = Engine(cfg, self._angel_ins, HubEngineFeed(self.hub), orders)
         eng.notify = self.alerts.notify
         return eng
 
