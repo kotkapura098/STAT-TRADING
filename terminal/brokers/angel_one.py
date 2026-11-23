@@ -1,9 +1,7 @@
-"""Angel One SmartAPI primitives.
+"""Angel One SmartAPI adapters for authentication, instruments, market data and orders.
 
-This module is intentionally isolated from the existing engine interfaces until the
-service/account lifecycle migration is completed. It provides authenticated REST,
-instrument-master parsing, market-stream and order/account operations.
-Never enable live mode until the service wiring and live-account validation are done.
+Services wires these adapters into the existing terminal and strategy engine. Live
+execution still requires CI, paper-mode and broker-runtime verification before release.
 """
 from __future__ import annotations
 
