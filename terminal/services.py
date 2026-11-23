@@ -361,7 +361,7 @@ class Services:
                 self._indices = resolved
                 self._angel_ins = ins
                 self.catalog.set(cat)
-                self.chain.set_provider(AngelOneChainProvider(sess, ins, cat, self.hub))
+                self.chain.set_provider(AngelOneChainProvider(sess, ins, cat, self.hub, Path(self.cfg.data_dir) / "angel_oi_baselines.json"))
                 feed = AngelOneFeed(sess, self.cfg)
                 feed.start(lambda tick: self.hub.update(Quote(tick.symbol, tick.price, ts=tick.ts.timestamp())))
                 self.feed = feed
