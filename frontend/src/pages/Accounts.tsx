@@ -69,7 +69,7 @@ export function AccountsPanel() {
   const done=()=>{setDialog(null);reload();};
   async function disconnect() {
     setBusy(true);
-    try { await disconnectBroker(account?.id); toast("Disconnected from Angel One"); done(); }
+    try { await disconnectBroker(account?.id ?? ""); toast("Disconnected from Angel One"); done(); }
     catch(err){toast((err as Error).message,"err");} finally{setBusy(false);}
   }
   return <section className="panel" style={{marginBottom:12}}>
