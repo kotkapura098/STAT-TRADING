@@ -43,6 +43,11 @@ Use `paper` mode for integration testing. Live order placement is deliberately l
    - Set `ANGEL_STATIC_IP` to the registered primary IPv4 and optional secondary backup IPv4, comma-separated. Angel One documents a primary and optional secondary IP. Render Dedicated IP sets provide three IPv4 addresses, so do not assume all three fit the broker allowlist; use a single fixed egress IP or a proxy with a primary/secondary pair (Render's QuotaGuard Static IP is one option). Render Dedicated IP sets are a separate feature and provide three IPv4 addresses.
    - If using a proxy, set standard `HTTPS_PROXY` (and `HTTP_PROXY` if needed) so the SmartAPI REST client and outbound-IP check use the same egress. The terminal compares its detected outbound IPv4 with the configured list and blocks place/modify/cancel if they do not match. The app cannot verify Angel One's server-side allowlist, so register every configured address with Angel One.
    - Paper mode and live market-data access remain available without this order-IP configuration.
+8. SmartAPI request limits and session lifecycle:
+   - The adapter enforces the documented 9 order-mutation requests/second limit, 1 order-book request/second limit, and 10 individual-order-status requests/second limit.
+   - Strategy status polling uses the unique-order-ID details endpoint instead of repeatedly polling the full order book.
+   - Angel One documents a daily logout at midnight. A refresh may not survive that logout; reconnect with a current TOTP when the session expires.
+   - Generate/use the static-IP-based SmartAPI API key and verify the primary/secondary addresses in the Angel One developer portal before any live order test.
 
 The terminal supports one Angel One account. Credentials entered in Settings are encrypted in the persistent data directory using a key derived from `DASHBOARD_PASSWORD`; API responses return masked values, never the raw API Key, PIN or TOTP secret. Environment credentials take precedence and are read-only in the UI. Never commit `.env`, account data, tokens or screenshots containing credentials.
 
