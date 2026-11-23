@@ -186,6 +186,8 @@ def test_background_baseline_worker_hydrates_and_persists_contract_oi(tmp_path):
     provider.HISTORY_INTERVAL = 0
     provider._cache_path = tmp_path / "oi-cache.json"
     prior_day = now_ist().date() - timedelta(days=1)
+    while prior_day.weekday() >= 5:
+        prior_day -= timedelta(days=1)
     client.getOIData = lambda params: {"status": True, "data": [
         {"time": f"{prior_day.isoformat()}T15:29:00+05:30", "oi": 54321}
     ]}
