@@ -32,7 +32,11 @@ SEGMENT_TO_EXCHANGE = {
     "bse_fo": "BFO", "mcx_fo": "MCX",
 }
 SEGMENT_TO_WS = {"nse_cm": 1, "nse_fo": 2, "bse_cm": 3, "bse_fo": 4, "mcx_fo": 5}
-EXCHANGE_TO_SEGMENT = {v: k for k, v in SEGMENT_TO_EXCHANGE.items()}
+EXCHANGE_TO_SEGMENT = {
+    "NSE": "nse_cm", "NSE_CM": "nse_cm", "NSE_FO": "nse_fo",
+    "BSE": "bse_cm", "BSE_CM": "bse_cm", "BSE_FO": "bse_fo",
+    "NFO": "nse_fo", "BFO": "bse_fo", "MCX": "mcx_fo", "MCX_FO": "mcx_fo",
+}
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -183,7 +187,7 @@ class AngelOneInstruments:
         today = now_ist().date()
         rows = []
         for row in self._rows:
-            if str(row.get("exch_seg", "")).upper() != "NFO":
+            if str(row.get("exch_seg", "")).upper() not in ("NFO", "NSE_FO"):
                 continue
             if str(row.get("name", "")).upper() != instrument.upper():
                 continue
