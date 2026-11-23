@@ -397,7 +397,10 @@ class AngelOneOrders:
         row = self.instruments.get_row(f"{req.contract.segment}|{req.contract.token}")
         if not row:
             raise OrderError("Contract is missing from Angel One instrument master.")
-        ordertype = {"MKT": "MARKET", "L": "LIMIT", "SL": "STOPLOSS_LIMIT"}.get(req.order_type)
+        if req.side not in ("B", "S") or req.qty <= 0:
+            raise OrderError("Order side or quantity is invalid.")
+        ordertype = {"MKT": "MARKET", "L": "LIMIT", "SL": "STOPLOSS_LIMIT",
+                     "SL-M": "STOPLOSS_MARKET"}.get(req.order_type)
         if not ordertype:
             raise OrderError(f"Unsupported internal order type: {req.order_type}")
         payload = {
@@ -421,26 +424,50 @@ class AngelOneOrders:
         _ok(response, "cancel order")
 
     def modify(self, order_id: str, payload: dict) -> None:
+        """Modify using the SmartAPI SDK's required orderid-bearing payload."""
+        if not isinstance(payload, dict) or not payload.get("orderid"):
+            raise OrderError("Angel One modify requires a complete payload containing orderid.")
+        if str(payload["orderid"]) != str(order_id):
+            raise OrderError("Modify payload orderid does not match the requested order.")
         _ok(self.session.require_client().modifyOrder(payload), "modify order")
 
+    @staticmethod
+    def _list_data(response: Any, action: str) -> list[dict]:
+        data = _ok(response, action)
+        # SmartAPI SDK responses have appeared as either data=[...] or data={"data":[...]}.
+        rows = data.get("data") if isinstance(data, dict) else data
+        if isinstance(rows, dict):
+            rows = rows.get("data")
+        if not isinstance(rows, list):
+            raise OrderError(f"Angel One {action} returned an unreadable list.")
+        return [r for r in rows if isinstance(r, dict)]
+
+    def order_book(self) -> list[dict]:
+        return self._list_data(self.session.require_client().orderBook(), "order book")
+
+    def trade_book(self) -> list[dict]:
+        client = self.session.require_client()
+        method = getattr(client, "tradeBook", None) or getattr(client, "tradebook", None)
+        if method is None:
+            raise OrderError("The installed Angel One SDK does not expose tradeBook().")
+        return self._list_data(method(), "trade book")
+
     def status(self, order_id: str) -> OrderStatus:
-        book = self.session.require_client().orderBook()
-        data = _ok(book, "order book")
-        rows = data.get("data") if isinstance(data.get("data"), list) else []
-        row = next((x for x in rows if str(x.get("orderid")) == str(order_id)), None)
+        rows = self.order_book()
+        row = next((x for x in rows if str(x.get("orderid") or x.get("order_id")) == str(order_id)), None)
         if row is None:
             return OrderStatus(str(order_id), "UNKNOWN", reason="Order not present in Angel One order book.")
-        raw = str(row.get("orderstatus") or row.get("status") or "").upper()
+        raw = str(row.get("orderstatus") or row.get("status") or "").strip().upper().replace("_", " ")
         state = {"COMPLETE": "COMPLETE", "OPEN": "OPEN", "PENDING": "OPEN",
                  "TRIGGER PENDING": "TRIGGER_PENDING", "REJECTED": "REJECTED",
                  "CANCELLED": "CANCELLED", "CANCELED": "CANCELLED"}.get(raw, "UNKNOWN")
-        return OrderStatus(str(order_id), state, int(_num(row.get("filledshares"))),
-                           _num(row.get("averageprice")), str(row.get("text") or ""))
+        return OrderStatus(str(order_id), state,
+                           int(_num(row.get("filledshares") or row.get("filledsharesqty"))),
+                           _num(row.get("averageprice") or row.get("average_price")),
+                           str(row.get("text") or row.get("rejreason") or ""))
 
     def positions(self) -> dict[str, int] | None:
-        response = self.session.require_client().position()
-        data = _ok(response, "positions")
-        rows = data.get("data") if isinstance(data.get("data"), list) else []
+        rows = self._list_data(self.session.require_client().position(), "positions")
         out: dict[str, int] = {}
         for row in rows:
             symbol = str(row.get("tradingsymbol") or "")
@@ -449,9 +476,10 @@ class AngelOneOrders:
         return out
 
     def holdings(self) -> list[dict]:
-        data = _ok(self.session.require_client().holding(), "holdings")
-        return data.get("data", []) if isinstance(data.get("data"), list) else []
+        return self._list_data(self.session.require_client().holding(), "holdings")
 
     def funds(self) -> dict:
         data = _ok(self.session.require_client().rmsLimit(), "funds")
+        if isinstance(data.get("data"), dict):
+            data = data["data"]
         return data
