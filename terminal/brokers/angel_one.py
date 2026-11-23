@@ -187,9 +187,11 @@ class AngelOneInstruments:
         today = now_ist().date()
         rows = []
         for row in self._rows:
-            if str(row.get("exch_seg", "")).upper() not in ("NFO", "NSE_FO"):
+            exchange_segment = str(row.get("exch_seg", "")).upper()
+            if exchange_segment not in ("NFO", "NSE_FO", "BFO", "BSE_FO"):
                 continue
-            if str(row.get("name", "")).upper() != instrument.upper():
+            segment = EXCHANGE_TO_SEGMENT.get(exchange_segment)
+            if not segment or str(row.get("name", "")).upper() != instrument.upper():
                 continue
             try:
                 exp = datetime.strptime(str(row.get("expiry", "")).upper(), "%d%b%Y").date()
@@ -210,7 +212,7 @@ class AngelOneInstruments:
                 continue
             strike = _num(row.get("strike")) / 100
             token = str(row.get("token"))
-            c = Contract(str(row.get("symbol") or ""), token, "nse_fo", strike, opt, exp,
+            c = Contract(str(row.get("symbol") or ""), token, segment, strike, opt, exp,
                          max(int(_num(row.get("lotsize"), 1)), 1))
             strikes.setdefault(strike, {})[opt] = c
         ordered = sorted(strikes)
