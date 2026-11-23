@@ -112,3 +112,50 @@ def test_angel_one_chain_rejects_failed_quote_response():
         assert "rate limit" in str(exc)
     else:
         raise AssertionError("failed quote response must not produce a fake chain")
+
+
+
+def test_historical_oi_baseline_uses_last_prior_session_observation():
+    from datetime import timedelta
+    provider, client = make_provider()
+    today = date(2026, 11, 23)
+    captured = {}
+
+    def get_oi(params):
+        captured.update(params)
+        return {"status": True, "data": [
+            {"time": "2026-11-20T15:28:00+05:30", "oi": 41000},
+            {"time": "2026-11-20T15:29:00+05:30", "oi": 42000},
+            {"time": "2026-11-23T09:16:00+05:30", "oi": 50000},
+        ]}
+
+    client.getOIData = get_oi
+    result = provider._request_historical_oi("NFO", "1001", today)
+    assert result == ("2026-11-20", 42000.0)
+    assert captured["exchange"] == "NFO"
+    assert captured["symboltoken"] == "1001"
+    assert captured["interval"] == "ONE_MINUTE"
+    assert captured["todate"] == "2026-11-22 15:30"
+
+
+def test_historical_oi_baseline_accepts_sdk_array_rows():
+    provider, client = make_provider()
+    client.getOIData = lambda params: {"status": True, "data": [
+        ["2026-11-20T15:29:00+05:30", 76543],
+    ]}
+    assert provider._request_historical_oi("NFO", "1002", date(2026, 11, 23)) == ("2026-11-20", 76543.0)
+
+
+def test_historical_oi_baseline_is_cached_by_request_day_and_contract(tmp_path):
+    cache = tmp_path / "angel_oi.json"
+    provider, _ = make_provider()
+    provider._cache_path = cache
+    day = date(2026, 11, 23)
+    key = provider._oi_cache_key(day, "NFO", "1001")
+    provider._oi_cache[key] = {"source_day": "2026-11-20", "oi": 42000}
+    provider._save_oi_cache()
+
+    restored, _ = make_provider()
+    restored._cache_path = cache
+    restored._load_oi_cache()
+    assert restored._previous_oi("NFO", "1001") == 42000
