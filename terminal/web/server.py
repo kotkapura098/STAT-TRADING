@@ -301,7 +301,7 @@ def create_app(svc: Services, password: str) -> FastAPI:
             feed = svc.feed
             lim = svc.trading.limits
             return {
-                "mode": svc.mode, "needs_connect": svc.needs_connect, "connected": svc.connected,
+                "mode": svc.mode, "needs_connect": svc.needs_connect, "connected": bool(svc.connected and svc.session and getattr(svc.session, "logged_in", False)),
                 "my_ip": getattr(svc.session, "my_ip", None), "ip_alert": ip_alert(), "activity": activity(), "market": market_status(), "market_mcx": mcx_status(close_override=svc.cfg.mcx_close_time), "commodities": svc.commodity_cards(),
                 "feed": {"connected": bool(getattr(feed, "connected", False)), "age_s": None if age is None else round(age, 1),
                          "ticks": hub.tick_count, "subscribed": len(hub.wanted())},
