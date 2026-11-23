@@ -71,7 +71,7 @@ class AngelOneCatalog(Catalog):
         self.ins.load()
         names={}
         for row in self.ins._rows:
-            if str(row.get("exch_seg") or "").upper() != "NFO":
+            if str(row.get("exch_seg") or "").upper() not in ("NFO", "NSE_FO"):
                 continue
             if str(row.get("opttype") or "").upper() in ("CE","PE"):
                 name=str(row.get("name") or "").upper()
@@ -94,7 +94,7 @@ class AngelOneCatalog(Catalog):
         day=on_or_after or now_ist().date()
         choices=[]
         for key,row in self.ins._by_key.items():
-            if str(row.get("exch_seg") or "").upper() != "MCX":
+            if str(row.get("exch_seg") or "").upper() not in ("MCX", "MCX_FO"):
                 continue
             if str(row.get("name") or "").upper() != name.upper():
                 continue
