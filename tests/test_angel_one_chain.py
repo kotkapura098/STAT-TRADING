@@ -150,7 +150,8 @@ def test_historical_oi_baseline_is_cached_by_request_day_and_contract(tmp_path):
     cache = tmp_path / "angel_oi.json"
     provider, _ = make_provider()
     provider._cache_path = cache
-    day = date(2026, 11, 23)
+    from terminal.clock import now_ist
+    day = now_ist().date()
     key = provider._oi_cache_key(day, "NFO", "1001")
     provider._oi_cache[key] = {"source_day": "2026-11-20", "oi": 42000}
     provider._save_oi_cache()
@@ -159,3 +160,19 @@ def test_historical_oi_baseline_is_cached_by_request_day_and_contract(tmp_path):
     restored._cache_path = cache
     restored._load_oi_cache()
     assert restored._previous_oi("NFO", "1001") == 42000
+
+
+
+def test_chain_uses_cached_historical_oi_for_buildup_analysis():
+    from terminal.clock import now_ist
+    from terminal.market.chain import analyse
+    provider, _ = make_provider()
+    today = now_ist().date()
+    for token in ("1001", "1002", "1003", "1004"):
+        key = provider._oi_cache_key(today, "NFO", token)
+        provider._oi_cache[key] = {"source_day": "2026-11-20", "oi": 40000}
+    raw = provider.fetch("NIFTY", EXPIRY.isoformat())
+    assert raw.rows[26000.0]["CE"].oi_prev == 40000
+    result = analyse(raw, SimpleNamespace(ltp=lambda key: None, get=lambda key: None), None)
+    assert result["rows"][0]["ce"]["oi_chg"] == 5000
+    assert result["rows"][0]["ce"]["buildup"] == "Long build-up"
