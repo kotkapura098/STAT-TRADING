@@ -148,7 +148,7 @@ def _short_error(e: Exception) -> str:
         return "this connection has no " + ("IPv6" if "::" in t or "ipv6" in low else "such") + " route"
     if "timed out" in low or "timeout" in low:
         return "timed out"
-    return t[:120]
+    return type(e).__name__ + " (IP lookup failed)"
 
 
 def parse_public(text: str, fam: str) -> str:
@@ -240,7 +240,7 @@ class NetIp:
                 return "", "wrong kind of address"
             return ip, ("" if ip else (err or "no answer"))
         except Exception as e:
-            log.warning("IP detection (%s) failed: %s", fam, e)
+            log.warning("IP detection (%s) failed (%s)", fam, type(e).__name__)
             return "", _short_error(e)
 
     def last(self) -> dict:
