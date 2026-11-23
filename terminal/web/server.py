@@ -344,7 +344,7 @@ def create_app(svc: Services, password: str) -> FastAPI:
     def accounts_view() -> dict:
         v = svc.vault
         conn_ids = list(svc.accounts.keys())
-        return {"ok": True, "mode": svc.mode, "can_connect": svc.mode != "sample", "connected": svc.connected,
+        return {"ok": True, "mode": svc.mode, "can_connect": svc.mode == "paper", "connected": svc.connected,
                 "active": svc.account["id"] if svc.account else None, "default": v.default_id(), "readable": v.readable, "problem": v.problem,
                 "accounts": v.public(connected_ids=conn_ids)}
 
