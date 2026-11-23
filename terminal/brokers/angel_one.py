@@ -90,6 +90,10 @@ class AngelOneSession:
         profile = client.getProfile(self.refresh_token)
         self.profile = _ok(profile, "profile")
 
+    @property
+    def logged_in(self) -> bool:
+        return self.client is not None and bool(self.jwt_token)
+
     def require_client(self):
         if self.client is None:
             raise RuntimeError("Angel One account is not connected.")
