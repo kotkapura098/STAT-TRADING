@@ -24,7 +24,11 @@ class AngelOneGateway:
             from ..models import Contract
             from datetime import date
             contract = Contract(inst.symbol, inst.token, inst.segment, 0, "", inst.expiry or date.today(), inst.lot)
-        req = OrderRequest(contract, ticket.side, qty, ticket.order_type, ticket.price, ticket.trigger, ticket.tag)
+        product_type = {"MIS": "INTRADAY", "NRML": "CARRYFORWARD", "CNC": "DELIVERY"}.get(ticket.product)
+        if product_type is None:
+            raise OrderError(f"Unsupported Angel One product: {ticket.product}")
+        req = OrderRequest(contract, ticket.side, qty, ticket.order_type, ticket.price, ticket.trigger,
+                           ticket.tag, product_type=product_type, validity=ticket.validity)
         try:
             oid = self.orders_api.place(req)
         except (TimeoutError, ConnectionError) as exc:
@@ -50,7 +54,9 @@ class AngelOneGateway:
 
     @staticmethod
     def _product(value):
-        return {"MIS": "INTRADAY", "NRML": "CARRYFORWARD", "CNC": "DELIVERY"}.get(value, "INTRADAY")
+        return {"MIS": "INTRADAY", "INTRADAY": "INTRADAY",
+                "NRML": "CARRYFORWARD", "CARRYFORWARD": "CARRYFORWARD",
+                "CNC": "DELIVERY", "DELIVERY": "DELIVERY"}.get(value, "INTRADAY")
 
     @staticmethod
     def _status(value):
@@ -133,6 +139,30 @@ class AngelOneGateway:
                 avg if net else 0, ltp, realised, unrealised, inst.expiry.isoformat() if inst and inst.expiry else None))
         return out
 
+    def holdings(self):
+        """Return normalized Angel One delivery holdings without guessing unavailable values."""
+        try:
+            rows = self.orders_api.holdings()
+        except Exception:
+            log.exception("Angel One holdings unavailable")
+            return None
+        out = []
+        for row in rows:
+            token = str(row.get("symboltoken") or "")
+            exchange = str(row.get("exchange") or "NSE").upper()
+            segment = next((s for s, e in SEGMENT_TO_EXCHANGE.items() if e == exchange), "nse_cm")
+            key = f"{segment}|{token}" if token else ""
+            inst = self.cat.get(key) if key else None
+            out.append({
+                "key": key, "symbol": str(row.get("tradingsymbol") or (inst.symbol if inst else "")),
+                "quantity": int(_num(row.get("quantity") or row.get("totalquantity"))),
+                "average_price": _num(row.get("averageprice")),
+                "ltp": self.hub.ltp(key) if key else _num(row.get("ltp")) or None,
+                "pnl": _num(row.get("profitandloss") or row.get("pnl")),
+                "product": str(row.get("producttype") or "DELIVERY"),
+            })
+        return out
+
     def funds(self):
         try:
             d = self.orders_api.funds()
@@ -140,6 +170,7 @@ class AngelOneGateway:
             log.exception("Angel One funds unavailable")
             return None
         return Funds(available=_num(d.get("availablecash") or d.get("net")), used=_num(d.get("utiliseddebits") or d.get("utilisedamount")),
-                     collateral=_num(d.get("collateral")), realised=_num(d.get("m2munrealised")) if d.get("m2munrealised") is not None else None,
-                     unrealised=_num(d.get("m2mrealized")) if d.get("m2mrealized") is not None else None,
+                     collateral=_num(d.get("collateral")),
+                     realised=_num(d.get("m2mrealized")) if d.get("m2mrealized") is not None else None,
+                     unrealised=_num(d.get("m2munrealised")) if d.get("m2munrealised") is not None else None,
                      simulated=False, note="Values are mapped from Angel One RMS limits response.", extra=d)
