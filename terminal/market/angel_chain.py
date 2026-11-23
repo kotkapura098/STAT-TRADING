@@ -2,7 +2,7 @@
 
 SmartAPI does not expose a single option-chain endpoint. We build the chain from
 listed option contracts and fetch FULL quote batches (max 50 tokens/request), which
-include current open interest. No synthetic OI or previous-day OI is invented.
+include current open interest. Previous-session OI is hydrated from the historical OI endpoint.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ class AngelOneChainProvider:
     BATCH_SIZE = 50
     REQUEST_INTERVAL = 1.05
     HISTORY_INTERVAL = 0.55
-    BASELINE_LOOKBACK_DAYS = 10
+    BASELINE_LOOKBACK_DAYS = 15
     BASELINE_RETRY_SECONDS = 300
 
     def __init__(self, session, instruments, catalog, hub, cache_path=None):
