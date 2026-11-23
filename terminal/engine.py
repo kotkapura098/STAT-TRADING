@@ -133,8 +133,8 @@ class Engine:
             if pos is None:
                 self.phase = "BLOCKED"
                 self.manual_action_required = True
-                self.say("CRITICAL", "Could not read your Kotak positions, so the terminal cannot tell whether a trade "
-                                     "is already open. It will not trade blind. Check the Kotak app / your login and "
+                self.say("CRITICAL", "Could not read your Angel One positions, so the terminal cannot tell whether a trade "
+                                     "is already open. It will not trade blind. Check the Angel One app / your login and "
                                      "start again.")
                 return False
             u = self.cfg.inst.underlying.upper()
