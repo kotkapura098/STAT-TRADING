@@ -382,6 +382,9 @@ class Services:
                 except Exception:
                     log.exception("failed to stop Angel One feed after login error")
                 self.feed = None
+                self.chain.set_provider(None)
+                self.catalog.set(None)
+                self.hub.reset()
                 try:
                     sess.logout()
                 except Exception:
