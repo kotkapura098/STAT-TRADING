@@ -411,7 +411,7 @@ class Services:
     def _leave_sample(self, mode: str) -> None:
         """Turn the invented-data demo into a paper / real terminal: stop the sample world, forget everything it made up,
         and wait for the Kotak login. Nothing invented stays behind on screen or in the saved price history."""
-        from .brokers.kotak import KotakInstruments, KotakSession
+        from .brokers.angel_one import AngelOneInstruments, AngelOneSession
         feed = self.feed
         if feed is not None:
             feed.stop()
@@ -431,8 +431,8 @@ class Services:
         self.journal.ns = None
         self.trading._pos_keys = set()
         self.store.drop_derivative_items()
-        self.session = KotakSession(self.env)
-        self._kotak_ins = KotakInstruments(self.session, self.cfg)
+        self.session = AngelOneSession(self.env)
+        self._angel_ins = AngelOneInstruments(self.session, self.cfg)
         self.algo.session = self.session
         self.bt_src = "market"
         if self.recorder is None:
@@ -460,7 +460,7 @@ class Services:
     def set_mode(self, mode: str, confirm: str = "") -> dict:
         """Switch the whole terminal between paper (real prices, simulated orders) and real trading, without a new login.
         The choice is for this run only: after a restart the terminal starts in the mode set in config.yaml / --mode."""
-        from .trading.kotak_gateway import KotakGateway
+        from .trading.angel_one_gateway import AngelOneGateway
         if mode not in ("paper", "live"):
             raise RuntimeError("Choose paper or real trading.")
         with self._connect_lock:
@@ -483,7 +483,7 @@ class Services:
                                                      self.account["label"] if self.account else "")
                     if problem:
                         raise RuntimeError(problem)
-                    gateway = KotakGateway(self.session, self.catalog, self.hub)
+                    gateway = AngelOneGateway(self.session, self.catalog, self.hub)
                 else:
                     gateway = SimBroker(self.hub, self.catalog, self.cfg.manual.paper_capital, self.cfg.data_dir)
             old = self.mode
@@ -584,9 +584,9 @@ class Services:
             ecfg.strategy = dataclasses.replace(cfg.strategy, strike_window=min(cfg.strategy.strike_window, 3))
             return Engine(ecfg, SyntheticInstruments(ecfg, day),
                           ReplayFeed(build_day(day, cfg.demo_scenario, underlying=cfg.inst.underlying)), PaperOrders())
-        from .brokers.kotak import KotakOrders
-        orders = PaperOrders() if self.mode == "paper" else KotakOrders(self.session, cfg)
-        eng = Engine(cfg, self._kotak_ins, HubEngineFeed(self.hub), orders)
+        from .brokers.angel_one import AngelOneOrders
+        orders = PaperOrders() if self.mode == "paper" else AngelOneOrders(self.session, self._angel_ins, cfg)
+        eng = Engine(cfg, self._angel_ins, HubEngineFeed(self.hub), orders)
         eng.notify = self.alerts.notify
         return eng
 
