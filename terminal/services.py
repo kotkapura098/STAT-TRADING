@@ -29,7 +29,7 @@ from .engine import Engine
 from .journal import Journal
 from .market.catalog import LazyCatalog
 from .market.charts import ChartService
-from .market.chain import ChainService, KotakChainProvider, SampleChainProvider
+from .market.chain import ChainService, SampleChainProvider
 from .market.hub import HubEngineFeed, QuoteHub
 from .market.models import Instrument
 from .netip import NetIp
@@ -333,6 +333,7 @@ class Services:
             return
         from .brokers.angel_one import AngelOneFeed, AngelOneInstruments, AngelOneSession
         from .market.angel_catalog import AngelOneCatalog
+        from .market.angel_chain import AngelOneChainProvider
         from .market.models import Quote
         from .trading.angel_gateway import AngelOneGateway
 
@@ -360,6 +361,7 @@ class Services:
                 self._indices = resolved
                 self._angel_ins = ins
                 self.catalog.set(cat)
+                self.chain.set_provider(AngelOneChainProvider(sess, ins, cat, self.hub))
                 feed = AngelOneFeed(sess, self.cfg)
                 feed.start(lambda tick: self.hub.update(Quote(tick.symbol, tick.price, ts=tick.ts.timestamp())))
                 self.feed = feed
