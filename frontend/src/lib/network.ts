@@ -2,7 +2,7 @@ export interface NetworkStatus {
   ok: boolean;
   app_mode: "sample" | "paper" | "live";
   mode: "angel-one";
-  detected: { at: number | null; v4: string; v6: string; errors: { v4: string; v6: string } };
+  detected: { at: number | null; v4: string; v6: string; err: { v4: string; v6: string } };
   outbound_ipv4: string;
   own: { v4: string; v6: string };
   registered: { v4: string; v6: string; at: number } | null;
