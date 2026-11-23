@@ -16,7 +16,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .accounts import AccountVault
 from .alerts import Alerts
 from .backtest import BacktestManager
 from .history import CandleDB, Recorder
@@ -77,7 +76,6 @@ class Services:
         self.charts = ChartService(self.hub, self.store, sample=self.mode == "sample")
         self.netip = NetIp(self.store)
         self.session = None                    # AngelOneSession (paper / live)
-        self.vault = AccountVault(Path(cfg.data_dir) / "accounts.enc", env)
         self.accounts: dict[str, dict] = {}    # all connected accounts: aid -> {id, label, ucc}
         self.sessions: dict[str, Any] = {}     # single Angel One session, keyed by stable account id
         self.gateways: dict[str, Any] = {}     # single Angel One gateway / SimBroker
@@ -88,7 +86,6 @@ class Services:
         self.feed = None
         self._connected = False
         self._connect_lock = threading.Lock()
-        self._kotak_ins = None
         self.alerts = Alerts(env.get("TELEGRAM_BOT_TOKEN", ""), env.get("TELEGRAM_CHAT_ID", ""), self.mode, cfg.alerts)
         m = cfg.manual
         self.trading = TradingService(
@@ -172,16 +169,6 @@ class Services:
         if self.sessions:
             return next(iter(self.sessions.values()))
         return getattr(self, "_default_session", None)
-
-    def get_valid_kotak_session(self):
-        """Return the active or first connected Kotak session that is currently logged in."""
-        sess = self.get_session()
-        if sess and getattr(sess, "logged_in", False) and getattr(sess, "client", None) is not None:
-            return sess
-        for s in self.sessions.values():
-            if s and getattr(s, "logged_in", False) and getattr(s, "client", None) is not None:
-                return s
-        return sess or getattr(self, "_default_session", None)
 
     @property
     def session(self):
@@ -286,15 +273,6 @@ class Services:
         threading.Thread(target=loop, name="journal-sync", daemon=True).start()
 
     # ------------------------------------------------------------------ static IP
-    def _account_ip(self) -> tuple[str, str]:
-        """Static IP saved for the connected account (or '' if none / not connected) and its label."""
-        if not self.account:
-            return "", ""
-        try:
-            return self.vault.get(self.account["id"]).get("static_ip", ""), self.account["label"]
-        except Exception:
-            return "", ""
-
     def _ip_problem(self, seen) -> str | None:
         # Angel One SmartAPI does not use Kotak's registered-static-IP handshake.
         return None
