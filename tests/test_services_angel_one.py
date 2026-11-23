@@ -12,7 +12,7 @@ def test_live_engine_uses_angel_one_orders_and_shared_quote_hub(monkeypatch):
             seen.update(cfg=cfg, instruments=instruments, feed=feed, orders=orders)
 
     class FakeOrders:
-        def __init__(self, session, instruments, cfg):
+        def __init__(self, session, instruments, cfg, ip_check=None):
             seen["orders_args"] = (session, instruments, cfg)
 
     class FakeHubFeed:
