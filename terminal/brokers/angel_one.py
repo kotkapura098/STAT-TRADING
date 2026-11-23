@@ -352,7 +352,7 @@ class AngelOneOrders:
         row = self.instruments.get_row(f"{req.contract.segment}|{req.contract.token}")
         if not row:
             raise OrderError("Contract is missing from Angel One instrument master.")
-        ordertype = {"MKT": "MARKET", "L": "LIMIT", "SL": "STOPLOSS_LIMIT"}.get(req.order_type)
+        ordertype = {"MKT": "MARKET", "L": "LIMIT", "SL": "STOPLOSS_LIMIT", "SL-M": "STOPLOSS_MARKET"}.get(req.order_type)
         if not ordertype:
             raise OrderError(f"Unsupported internal order type: {req.order_type}")
         payload = {
