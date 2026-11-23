@@ -203,7 +203,7 @@ class AngelOneChainProvider:
             rows = self._option_rows(name)
             if not rows:
                 continue
-            lot = max(int(_f(rows[0][1].get("lotsize"), 1)), 1)
+            lot = max(int((_f(rows[0][1].get("lotsize")) or 1)), 1)
             out.append({"name": name, "label": self._label(name), "lot": lot,
                         "kind": "index" if name in known else ("commodity" if str(rows[0][1].get("exch_seg")).upper() == "MCX" else "stock")})
         return out
@@ -295,7 +295,7 @@ class AngelOneChainProvider:
         # the option-chain request does not block on hundreds of history calls.
         self._queue_oi_baselines(contracts)
         quotes = self._full_quotes([r for _, r in contracts])
-        lot = max(int(_f(contracts[0][1].get("lotsize"), 1)), 1)
+        lot = max(int((_f(contracts[0][1].get("lotsize")) or 1)), 1)
         raw = RawChain(target, expiry, lot, spot_key, spot, None)
         for _, row in contracts:
             exchange = str(row.get("exch_seg") or "").upper()
