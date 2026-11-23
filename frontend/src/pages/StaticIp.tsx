@@ -13,9 +13,9 @@ export function StaticIpPanel() {
     try {
       await api("/api/network/detect", { method: "POST" });
       reload();
-      toast("Outbound IP check refreshed", "success");
+      toast("Outbound IP check refreshed", "ok");
     } catch (e) {
-      toast(String(e), "error");
+      toast(String(e), "err");
     } finally {
       setBusy(false);
     }
