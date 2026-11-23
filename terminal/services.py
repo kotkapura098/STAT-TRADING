@@ -338,6 +338,7 @@ class Services:
             if self.mode == "live" and not confirm_live:
                 raise RuntimeError("LIVE mode: confirm that orders may be real on your Angel One account.")
             sess = AngelOneSession(self.vault.creds(aid))
+            feed = None
             try:
                 sess.login(totp)
                 instruments = AngelOneInstruments(sess, self.cfg)
@@ -354,6 +355,8 @@ class Services:
                 self.catalog.set(catalog)
                 self._angel_ins = instruments
                 self.hub.want("dashboard", [card["key"] for card in self.index_cards()])
+                if not feed._ready.wait(timeout=10):
+                    raise RuntimeError("Angel One login succeeded, but the market-data WebSocket did not connect within 10 seconds. Check network access and SmartAPI status; no trading session was activated.")
                 self._seed_defaults()
                 self.charts.start()
                 gateway = AngelOneGateway(sess, self.catalog, self.hub) if self.mode == "live" else SimBroker(
@@ -372,6 +375,11 @@ class Services:
                 self._start_journal_loop()
                 log.info("Connected to Angel One in %s mode", self.mode)
             except Exception:
+                if feed is not None:
+                    try:
+                        feed.stop()
+                    except Exception:
+                        log.exception("Angel One feed cleanup after failed connect")
                 try:
                     sess.logout()
                 except Exception:
