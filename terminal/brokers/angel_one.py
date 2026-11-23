@@ -231,6 +231,10 @@ class AngelOneFeed:
         self._stop = threading.Event()
         self._ready = threading.Event()
 
+    @property
+    def connected(self) -> bool:
+        return self._ready.is_set()
+
     def start(self, on_tick: Callable[[Tick], None]) -> None:
         self._on_tick = on_tick
         self._stop.clear()
@@ -276,7 +280,7 @@ class AngelOneFeed:
         log.error("Angel One market stream error: %s", error)
         self._ready.clear()
 
-    def _on_close(self, ws=None):
+    def _on_close(self, ws=None, *args):
         log.warning("Angel One market stream closed")
         self._ready.clear()
 
