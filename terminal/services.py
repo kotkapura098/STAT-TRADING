@@ -341,7 +341,35 @@ class Services:
             if not aid:
                 raise RuntimeError("No Angel One account configured. Add API Key, Client Code and PIN under Settings.")
             if self.connected:
-                return
+                if self.session is not None and getattr(self.session, "logged_in", True):
+                    return
+                if self.rules.running() or (self.algo.engine and not self.algo.engine.finished.is_set()):
+                    raise RuntimeError("Angel One session expired. Stop running strategies before reconnecting with a fresh TOTP.")
+                try:
+                    self.journal.sync()
+                except Exception:
+                    log.exception("journal sync before expired-session reconnect")
+                if self.feed:
+                    self.feed.stop()
+                old_session = self.session
+                self.sessions.clear()
+                self.gateways.clear()
+                self.accounts.clear()
+                self.active_account_id = ""
+                self.session = None
+                self.connected = False
+                self.feed = None
+                self.journal.ns = None
+                self.algo.session = None
+                self.chain.set_provider(None)
+                self.catalog.set(None)
+                self._angel_ins = None
+                self.hub.reset()
+                if old_session:
+                    try:
+                        old_session.logout()
+                    except Exception:
+                        log.exception("Angel One expired-session logout")
             if self.mode == "live" and not confirm_live:
                 raise RuntimeError("LIVE mode: explicitly confirm that orders may be REAL on your Angel One account.")
             n, last = self._fails.get(aid, (0, 0.0))
