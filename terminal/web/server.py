@@ -535,6 +535,16 @@ def create_app(svc: Services, password: str) -> FastAPI:
     def positions(account_id: str = ""):
         return safe(lambda: svc.trading.positions_view(account_id.strip() or None))
 
+    @app.get("/api/holdings", dependencies=[Depends(auth)])
+    def holdings(account_id: str = ""):
+        def go():
+            gw = svc.get_gateway(account_id.strip() or None)
+            if gw is None:
+                return {"ok": False, "holdings": None, "reason": "not_connected"}
+            rows = gw.holdings() if hasattr(gw, "holdings") else None
+            return {"ok": rows is not None, "holdings": rows}
+        return safe(go)
+
     @app.get("/api/funds", dependencies=[Depends(auth)])
     def funds(account_id: str = ""):
         def go():
