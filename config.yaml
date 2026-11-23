@@ -1,9 +1,9 @@
 # ---------------------------------------------------------------------------
-#  Kotak Neo - Opening Range option-selling terminal
+#  Angel One SmartAPI - Opening Range option-selling terminal
 #  Start in paper mode. Do NOT switch to live until you have run paper mode
 #  for several sessions and checked every trade against your own chart.
 # ---------------------------------------------------------------------------
-mode: sample             # sample = invented data, no login (try the UI) | paper = live Kotak data + simulated orders
+mode: sample             # sample = invented data, no login (try the UI) | paper = live Angel One data + simulated orders
                          # live = REAL orders | replay = offline algo test (command line only)
 instrument: NIFTY        # NIFTY | SENSEX (one index per session)
 
@@ -32,7 +32,7 @@ risk:
   exit_buffer: 1.0
   feed_stale_s: 30           # in a trade and no ticks for 30s -> square off
   sl_poll_s: 3
-  unclear_retries: 5         # if Kotak's order status cannot be read, re-check this many times...
+  unclear_retries: 5         # if Angel One order status cannot be read, re-check this many times...
   unclear_wait_s: 1          # ...this many seconds apart, then HALT and alert (never guess)
 
 manual:                      # limits for orders you place by hand in the terminal
@@ -42,21 +42,20 @@ manual:                      # limits for orders you place by hand in the termin
   squareoff_buffer_pct: 3    # square-off sends a limit this % through the last price so it fills
   paper_capital: 1000000     # starting balance of the simulated account
 
-# Index cards on the Dashboard. Kotak subscribes indices by NAME. "Nifty 50", "Nifty Bank" and "SENSEX" are in
-# Kotak's docs; the other names are best guesses - tools/discover.py shows which ones your account really streams.
+# Angel One SmartAPI index tokens (NSE/BSE cash WebSocket exchange tokens).
 dashboard_indices:
-  - {label: "NIFTY 50", segment: nse_cm, token: "Nifty 50"}
-  - {label: "NIFTY BANK", segment: nse_cm, token: "Nifty Bank"}
-  - {label: "SENSEX", segment: bse_cm, token: "SENSEX"}
-  - {label: "NIFTY FIN SERVICE", segment: nse_cm, token: "Nifty Fin Service"}
-  - {label: "NIFTY MID SELECT", segment: nse_cm, token: "NIFTY MID SELECT"}
-  - {label: "INDIA VIX", segment: nse_cm, token: "India VIX"}
+  - {label: "NIFTY 50", segment: nse_cm, token: "99926000"}
+  - {label: "NIFTY BANK", segment: nse_cm, token: "99926009"}
+  - {label: "SENSEX", segment: bse_cm, token: "99919000"}
+  - {label: "NIFTY FIN SERVICE", segment: nse_cm, token: "99926037"}
+  - {label: "NIFTY MID SELECT", segment: nse_cm, token: "99926074"}
+  - {label: "INDIA VIX", segment: nse_cm, token: "99926017"}
 
 demo_scenario: put_sell      # sample mode: the synthetic day the Algo page's "Run demo day" button replays
 
 poll_interval_s: 0.5
 mcx_close_time: ""          # commodities: "" = automatic (23:30 in US summer time, 23:55 in winter, from 2 Nov 2026 it is 23:55). Or force "HH:MM".
-static_ip: ""                # live: put the static IP you registered with Kotak here. If Kotak sees a different
+static_ip: ""                # live: put the static IP you registered with Angel One here. If Angel One sees a different
                              # IP at login the terminal refuses to start (SEBI rules: orders from other IPs are rejected)
 data_dir: data
 log_dir: logs
