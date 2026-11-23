@@ -222,7 +222,7 @@ class Services:
         return out
 
     def start(self) -> None:
-        """Called once at app start. Sample mode comes up immediately; paper/live wait for the Kotak login."""
+        """Called once at app start. Sample mode comes up immediately; paper/live wait for the Angel One login."""
         if self.mode == "sample":
             cat = build_catalog()
             self.catalog.set(cat)
@@ -337,7 +337,8 @@ class Services:
             acct = self.vault.get(aid)
             if self.mode == "live" and not confirm_live:
                 raise RuntimeError("LIVE mode: confirm that orders may be real on your Angel One account.")
-            sess = AngelOneSession(self.vault.creds(aid))
+            creds = self.vault.creds(aid)
+            sess = AngelOneSession(creds)
             feed = None
             try:
                 sess.login(totp)
