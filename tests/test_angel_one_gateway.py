@@ -272,3 +272,40 @@ def test_static_ip_mismatch_blocks_angel_one_place_modify_and_cancel_before_netw
         orders.modify("OID-1", {"orderid": "OID-1"})
     with pytest.raises(OrderError, match="blocked"):
         orders.cancel("OID-1")
+
+
+
+def test_individual_order_status_uses_unique_order_id_instead_of_order_book():
+    from terminal.brokers.angel_one import AngelOneOrders
+
+    class Client:
+        def individual_order_details(self, unique_order_id):
+            assert unique_order_id == "UNIQUE-1"
+            return {"status": True, "data": {
+                "orderid": "OID-1", "uniqueorderid": "UNIQUE-1",
+                "orderstatus": "complete", "filledshares": "65", "averageprice": "102.5"
+            }}
+        def orderBook(self):
+            raise AssertionError("status polling must not use the 1-request/sec full order book")
+
+    orders = AngelOneOrders(
+        SimpleNamespace(require_client=lambda: Client()),
+        SimpleNamespace(get_row=lambda key: None),
+    )
+    orders._unique_order_ids["OID-1"] = "UNIQUE-1"
+    status = orders.status("OID-1")
+    assert status.state == "COMPLETE"
+    assert status.filled == 65
+    assert status.avg_price == 102.5
+
+
+def test_smartapi_sliding_window_rate_limiter_enforces_configured_limit():
+    import time
+    from terminal.brokers.angel_one import SlidingWindowRateLimiter
+
+    limiter = SlidingWindowRateLimiter(2, 0.05)
+    limiter.acquire()
+    limiter.acquire()
+    started = time.monotonic()
+    limiter.acquire()
+    assert time.monotonic() - started >= 0.035
