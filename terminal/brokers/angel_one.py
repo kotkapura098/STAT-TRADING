@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Callable
+from urllib.parse import urljoin
 
 import pyotp
 import requests
@@ -645,15 +646,39 @@ class AngelOneOrders:
             raise OrderError("The installed Angel One SDK does not expose tradeBook().")
         return self._list_data(method(), "trade book")
 
+    @staticmethod
+    def _individual_order_details(client: Any, unique_id: str) -> Any:
+        # The SDK helper omits a timeout; use its authenticated route with the SDK's
+        # session, proxy settings and TLS verification when those are available.
+        reqsession = getattr(client, "reqsession", None)
+        routes = getattr(client, "_routes", {})
+        if reqsession is not None and callable(getattr(reqsession, "get", None)) and isinstance(routes, dict):
+            root = getattr(client, "root", None) or getattr(client, "_rootUrl", "")
+            route = routes.get("api.individual.order.details", "/rest/secure/angelbroking/order/v1/details/")
+            url = urljoin(str(root), str(route)) + str(unique_id)
+            headers = client.requestHeaders()
+            access = str(getattr(client, "access_token", "") or "")
+            headers["Authorization"] = access if access.lower().startswith("bearer ") else "Bearer " + access
+            response = reqsession.get(
+                url, headers=headers, timeout=getattr(client, "timeout", 7),
+                proxies=getattr(client, "proxies", None) or None,
+                verify=not bool(getattr(client, "disable_ssl", False)),
+            )
+            response.raise_for_status()
+            return response.json()
+        details = getattr(client, "individual_order_details", None)
+        if callable(details):
+            return details(unique_id)
+        raise OrderError("The installed Angel One SDK does not expose individual order details.")
+
     def status(self, order_id: str) -> OrderStatus:
         order_id = str(order_id)
         unique_id = self._unique_order_ids.get(order_id)
         client = self.session.require_client()
-        details = getattr(client, "individual_order_details", None)
-        if unique_id and callable(details):
+        if unique_id:
             try:
                 _ANGEL_INDIVIDUAL_STATUS.acquire()
-                response = details(unique_id)
+                response = self._individual_order_details(client, unique_id)
                 data = _ok(response, "individual order details")
                 row = data.get("data") if isinstance(data, dict) and "data" in data else data
                 if isinstance(row, list):
