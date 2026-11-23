@@ -2,11 +2,11 @@
 Trade journal: keeps every fill, pairs buys with sells into round trips, and works out the statistics.
 
   * fills are copied from the broker's trade book (every ~20 s and whenever the journal is opened) into SQLite, so
-    history survives restarts and Kotak's one-day trade book;
+    history survives restarts and Angel One's one-day trade book;
   * round trips pair opening and closing fills first-in-first-out per instrument and product, across days, long or short;
   * every figure is BEFORE brokerage, STT, exchange charges, GST and stamp duty - those are not modelled;
   * tags come from the order tag recorded when the terminal placed the order ("manual", a strategy name, "squareoff").
-    Orders placed outside this terminal (e.g. in the Kotak app) show up as "other".
+    Orders placed outside this terminal (e.g. in the Angel One app) show up as "other".
 """
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def _name_of(label: str) -> str:
 class Journal:
     def __init__(self, store, trading, mode: str) -> None:
         self.store, self.trading, self.mode = store, trading, mode
-        self.ns: str | None = None            # which Kotak client the fills belong to (None = the plain mode name, as before accounts existed)
+        self.ns: str | None = None            # which Angel One client the fills belong to (None = the plain mode name, as before accounts existed)
         self._last_sync = 0.0
 
     @property
@@ -56,6 +56,34 @@ class Journal:
     def note_order(self, oid: str, inst, ticket, qty: int) -> None:
         self.store.add_order_meta(oid, self.space, now_ist().date().isoformat(), inst.key, inst.symbol, inst.label(), inst.lot,
                                   (ticket.tag or "manual")[:30])
+
+    def record_engine_fill(self, event: dict) -> int:
+        """Persist built-in paper-engine fills; live fills continue to come from Angel One tradeBook."""
+        if self.mode != "paper" or not self.ns:
+            return 0
+        try:
+            contract = event["contract"]
+            ts = event["ts"]
+            if not isinstance(ts, datetime):
+                return 0
+            qty, price = int(event["qty"]), float(event["price"])
+            if qty <= 0 or not math.isfinite(price) or price <= 0:
+                return 0
+            day = ts.date().isoformat()
+            side = "S" if event.get("event") == "entry" else "B"
+            seed = f"{self.space}|{event.get('event')}|{contract.symbol}|{qty}|{price}|{ts.isoformat()}|{time.time_ns()}"
+            uid = hashlib.sha1(seed.encode()).hexdigest()[:16]
+            row = {
+                "uid": uid, "mode": self.space, "day": day, "ts": ts.timestamp(),
+                "order_id": "ENGINE-" + uid, "key": f"{contract.segment}|{contract.token}",
+                "symbol": contract.symbol, "label": contract.symbol, "side": side,
+                "qty": qty, "price": price, "product": "MIS", "lot": int(contract.lot_size),
+                "tag": "ORB built-in", "name": event.get("name") or _name_of(contract.symbol),
+            }
+            return self.store.add_fills([row])
+        except Exception:
+            log.exception("could not persist built-in paper-engine fill")
+            return 0
 
     def sync(self) -> int:
         """Copy new fills from the broker's trade book. Returns how many were new. Never raises."""

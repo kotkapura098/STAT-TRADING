@@ -12,7 +12,7 @@ interface ModeInfo {
   account: string | null;
 }
 
-/** Paper (real prices, simulated orders) or Real (orders go to Kotak). Switches the whole terminal. */
+/** Paper (real prices, simulated orders) or Real (orders go to Angel One). Switches the whole terminal. */
 export function ModePanel() {
   const { data, reload } = usePoll<ModeInfo>("/mode", 5000);
   const [busy, setBusy] = useState(false);
@@ -25,7 +25,7 @@ export function ModePanel() {
     setErr(null);
     try {
       await api("/mode", { method: "POST", body: { mode, confirm: "REAL" } });
-      toast(mode === "live" ? "Real trading is ON. Orders go to your Kotak account." : "Paper trading is ON. Orders are simulated.", mode === "live" ? "err" : "ok");
+      toast(mode === "live" ? "Real trading is ON. Orders go to your Angel One account." : "Paper trading is ON. Orders are simulated.", mode === "live" ? "err" : "ok");
       window.location.reload();                                    // every screen starts fresh in the new mode
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "Could not change the mode");
@@ -47,10 +47,10 @@ export function ModePanel() {
         </div>
         <p className="hint" style={{ marginTop: 10 }}>
           {live
-            ? "REAL: every order you or a strategy places goes to your Kotak account with real money."
+            ? "REAL: every order you or a strategy places goes to your Angel One account with real money."
             : sample
-              ? "DEMO: prices and orders are invented, nothing is connected. Choose Paper trade to use real Kotak prices with simulated orders: you then add your Kotak account below and press Connect."
-              : "PAPER: real Kotak prices, but every order is simulated. Nothing reaches your broker."}
+              ? "DEMO: prices and orders are invented, nothing is connected. Choose Paper trade to use real Angel One prices with simulated orders: you then add your Angel One account below and press Connect."
+              : "PAPER: real Angel One prices, but every order is simulated. Nothing reaches your broker."}
         </p>
         {!live && data.mode !== "paper" && !data.can.paper && data.why.paper && <div className="notice warn" style={{ marginTop: 8 }}>{data.why.paper}</div>}
         {!live && !data.can.live && data.why.live && <div className="notice warn" style={{ marginTop: 8 }}>{data.why.live}</div>}

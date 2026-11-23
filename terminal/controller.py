@@ -9,10 +9,8 @@ from .engine import Engine
 
 
 class Controller:
-    def __init__(self, cfg: Config, build_engine: Callable[[], Engine], session=None,
-                 ip_check: Callable[[object], str | None] | None = None) -> None:
+    def __init__(self, cfg: Config, build_engine: Callable[[], Engine], session=None) -> None:
         self.cfg, self._build, self.session = cfg, build_engine, session
-        self._ip_check = ip_check or self._config_ip_check
         self.engine: Engine | None = None
         self._lock = threading.Lock()
 
@@ -34,17 +32,9 @@ class Controller:
             if self.engine and not self.engine.finished.is_set():
                 raise RuntimeError("A session is already running")
             if not self.logged_in:
-                raise RuntimeError("Log in to Kotak first")
-            if self.needs_login:
-                problem = self._ip_check(getattr(self.session, "my_ip", None))
-                if problem:
-                    raise RuntimeError(problem)
+                raise RuntimeError("Connect your Angel One account first")
             self.engine = self._build()
             self.engine.start()
-
-    def _config_ip_check(self, seen) -> str | None:
-        from .netip import problem_for_config
-        return problem_for_config(self.cfg.static_ip, seen)
 
     def pause(self, paused: bool) -> None:
         self._need_engine().pause_entries(paused)

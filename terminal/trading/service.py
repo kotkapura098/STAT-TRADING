@@ -2,7 +2,7 @@
 TradingService: every manual action goes through here (UI buttons, square-off, panic).
 
 It resolves the instrument and lot size from the catalog (never from the browser), validates the ticket,
-applies the risk checks, and only then calls the gateway (live Kotak or the simulator).
+applies the risk checks, and only then calls the gateway (live Angel One or the simulator).
 """
 from __future__ import annotations
 
@@ -162,7 +162,7 @@ class TradingService:
         try:
             oid = gw.place(inst, t, qty)
         except OrderUnknown:
-            raise OrderUnknown("Kotak did not confirm the order. It may or may not have been placed - check the Orders page "
+            raise OrderUnknown("Angel One did not confirm the order. It may or may not have been placed - check the Orders page "
                                "before trying again.")
         lbl = self.account_label(target_aid)
         log.info("order %s (%s, account %s): %s %s x%s %s", oid, t.tag, lbl or target_aid or "default", t.side, inst.symbol, qty, t.order_type)
@@ -183,15 +183,21 @@ class TradingService:
         gws = self.all_gateways()
         target_gw = None
         for aid, gw in gws.items():
-            row = next((o for o in (gw.orders() or []) if o.id == order_id), None)
+            rows = gw.orders()
+            if rows is None:
+                raise OrderUnknown("Cannot read the Angel One order book to verify this order. Restore the connection and check again.")
+            row = next((o for o in rows if o.id == order_id), None)
             if row is not None:
                 target_gw = gw
                 break
         if target_gw is None:
             target_gw = self.gateway()
-            row = next((o for o in (target_gw.orders() or []) if o.id == order_id), None)
+            rows = target_gw.orders()
+            if rows is None:
+                raise OrderUnknown("Cannot read the Angel One order book to verify this order. Restore the connection and check again.")
+            row = next((o for o in rows if o.id == order_id), None)
         if row is None:
-            raise OrderError("Order not found")
+            raise OrderError("Order not found in the readable broker order book.")
         if not row.is_open:
             raise OrderError("Only open orders can be modified")
         if order_type not in ORDER_TYPES or validity not in ("DAY", "IOC"):
@@ -204,22 +210,31 @@ class TradingService:
         try:
             target_gw.modify(order_id, order_type=order_type, qty=units, price=price, trigger=trigger, validity=validity)
         except OrderUnknown:
-            raise OrderUnknown("Kotak did not confirm the change - check the Orders page")
+            raise OrderUnknown("Angel One did not confirm the change - check the Orders page")
 
     def cancel(self, order_id: str) -> None:
         gws = self.all_gateways()
         for aid, gw in gws.items():
-            row = next((o for o in (gw.orders() or []) if o.id == order_id), None)
+            rows = gw.orders()
+            if rows is None:
+                raise OrderUnknown("Cannot read the Angel One order book to verify this order. Restore the connection and check again.")
+            row = next((o for o in rows if o.id == order_id), None)
             if row is not None:
                 try:
                     gw.cancel(order_id)
                     return
                 except OrderUnknown:
-                    raise OrderUnknown("Kotak did not confirm the cancel - check the Orders page")
+                    raise OrderUnknown("Angel One did not confirm the cancel - check the Orders page")
+        target = self.gateway()
+        rows = target.orders()
+        if rows is None:
+            raise OrderUnknown("Cannot read the Angel One order book to verify this order. Restore the connection and check again.")
+        if not any(o.id == order_id for o in rows):
+            raise OrderError("Order not found in the readable broker order book.")
         try:
-            self.gateway().cancel(order_id)
+            target.cancel(order_id)
         except OrderUnknown:
-            raise OrderUnknown("Kotak did not confirm the cancel - check the Orders page")
+            raise OrderUnknown("Angel One did not confirm the cancel - check the Orders page")
 
     # --------------------------------------------------------------- square off
     def _closing_ticket(self, p: PositionRow) -> OrderTicket | None:
@@ -244,7 +259,7 @@ class TradingService:
         for aid, gw in gws.items():
             rows = gw.positions()
             if rows is None:
-                continue
+                return {"ok": False, "rows": [], "totals": None, "reason": "broker_unavailable"}
             for p in rows:
                 if p.net_qty == 0 or (keys is not None and p.key not in keys):
                     continue
@@ -262,7 +277,7 @@ class TradingService:
         for aid, gw in gws.items():
             rows = gw.positions()
             if rows is None:
-                continue
+                return {"ok": False, "rows": [], "totals": None, "reason": "broker_unavailable"}
             for p in rows:
                 if p.net_qty == 0 or (keys is not None and p.key not in keys):
                     continue
@@ -371,7 +386,7 @@ class TradingService:
         for aid, gw in gws.items():
             rows = gw.positions()
             if rows is None:
-                continue
+                return {"ok": False, "rows": [], "totals": None, "reason": "broker_unavailable"}
             lbl = self.account_label(aid)
             for r in rows:
                 r.account_id = aid
@@ -392,7 +407,7 @@ class TradingService:
         for aid, gw in gws.items():
             rows = gw.orders()
             if rows is None:
-                continue
+                return {"ok": False, "rows": [], "reason": "broker_unavailable"}
             lbl = self.account_label(aid)
             for r in rows:
                 r.account_id = aid
@@ -412,7 +427,7 @@ class TradingService:
         for aid, gw in gws.items():
             rows = gw.trades()
             if rows is None:
-                continue
+                return {"ok": False, "rows": [], "reason": "broker_unavailable"}
             lbl = self.account_label(aid)
             for r in rows:
                 r.account_id = aid

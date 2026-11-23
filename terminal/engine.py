@@ -53,6 +53,7 @@ class Engine:
         self.finished = threading.Event()
         self.manual_action_required = False
         self.notify: Callable[[str, str], None] | None = None       # alerts hook: (kind, text); set by Services
+        self.on_fill: Callable[[dict], None] | None = None           # paper-mode journal callback
 
     # ------------------------------------------------------------------ public
     def start(self) -> None:
@@ -133,8 +134,8 @@ class Engine:
             if pos is None:
                 self.phase = "BLOCKED"
                 self.manual_action_required = True
-                self.say("CRITICAL", "Could not read your Kotak positions, so the terminal cannot tell whether a trade "
-                                     "is already open. It will not trade blind. Check the Kotak app / your login and "
+                self.say("CRITICAL", "Could not read your Angel One positions, so the terminal cannot tell whether a trade "
+                                     "is already open. It will not trade blind. Check the Angel One app / your login and "
                                      "start again.")
                 return False
             u = self.cfg.inst.underlying.upper()
@@ -354,21 +355,22 @@ class Engine:
         net = self._net_stable(sym)
         if net is None:
             self._halt_manual(f"Cannot tell whether the entry sell of {sym} executed and cannot read positions. "
-                              f"OPEN THE KOTAK APP NOW: you may be short {sym} with NO stop-loss.")
+                              f"OPEN THE ANGEL ONE APP NOW: you may be short {sym} with NO stop-loss.")
         elif net < 0:
             self.say("WARN", f"Broker shows you short {-net} {sym}; treating the entry as filled "
-                             f"(price estimated). Cancel any part of the sell order still open in the Kotak app.")
+                             f"(price estimated). Cancel any part of the sell order still open in the Angel One app.")
             self._entry_filled(sig, -net, avg or sig.limit_price, ts, estimated=True)
         elif net > 0:
-            self._halt_manual(f"Unexpected LONG {net} {sym} at the broker. Check the Kotak app.")
+            self._halt_manual(f"Unexpected LONG {net} {sym} at the broker. Check the Angel One app.")
         else:
             self._halt_manual(f"Entry order {oid or '(id unknown)'} for {sym} could not be confirmed and no position "
-                              f"shows yet. It may still be resting at Kotak - CHECK THE APP and cancel it if open.")
+                              f"shows yet. It may still be resting at Angel One - CHECK THE APP and cancel it if open.")
 
     def _entry_filled(self, sig: Signal, qty: int, price: float, ts: datetime, estimated: bool) -> None:
         if qty < sig.qty:
             self.say("WARN", f"Partial fill {qty}/{sig.qty} - managing the filled part")
         self.strategy.on_entry_filled(price, qty, ts)
+        self._record_fill("entry", sig.contract, qty, price, ts)
         self._log_trade({"event": "entry", "symbol": sig.contract.symbol, "qty": qty, "price": price,
                          "price_estimated": estimated, "sl": sig.sl_price, "ts": ts.isoformat(), "why": sig.reason})
         self._place_exchange_sl(sig, qty, ts)
@@ -385,7 +387,7 @@ class Engine:
             # the stop may or may not be resting. Do NOT add a second one; the software stop still works,
             # and _do_exit() checks positions before buying back.
             self._sl_oid = None
-            self.say("ERROR", f"Exchange SL reply unclear ({e}). Check the Kotak app for a resting buy-stop; "
+            self.say("ERROR", f"Exchange SL reply unclear ({e}). Check the Angel One app for a resting buy-stop; "
                               f"the software stop-loss is active.")
         except Exception as e:
             self.say("CRITICAL", f"Could not place the exchange stop-loss ({e}). Closing the trade rather "
@@ -409,7 +411,7 @@ class Engine:
             self._sl_unreadable = 0
             pos = self.strategy.pos
             if not st.avg_price:
-                self.say("WARN", "Exchange SL filled but Kotak gave no average price - using the trigger price")
+                self.say("WARN", "Exchange SL filled but Angel One gave no average price - using the trigger price")
             self._finish_exit(st.avg_price or pos.sl, ts, "SL(exchange)")
         elif st.state in ("REJECTED", "CANCELLED"):
             self.say("ERROR", f"Exchange SL order is {st.state} ({st.reason}) - relying on the software stop-loss")
@@ -430,11 +432,11 @@ class Engine:
             net = self._net_stable(sym)
             if net is None:
                 self._halt_manual(f"Cannot confirm the state of the buy-back of {sym} and cannot read positions. "
-                                  f"OPEN THE KOTAK APP NOW and square off manually.")
+                                  f"OPEN THE ANGEL ONE APP NOW and square off manually.")
                 return False
             if net > 0:
                 self._halt_manual(f"Now LONG {net} {sym} at the broker (a buy-back probably executed twice). "
-                                  f"Check the Kotak app and close it.")
+                                  f"Check the Angel One app and close it.")
                 return False
             short = -net
             got = remaining - short
@@ -499,7 +501,7 @@ class Engine:
         if remaining > 0:
             self.manual_action_required = True
             self.say("CRITICAL", f"COULD NOT BUY BACK {remaining} of {sym}. "
-                                 f"SQUARE OFF MANUALLY IN THE KOTAK NEO APP NOW.")
+                                 f"SQUARE OFF MANUALLY IN THE ANGEL ONE APP NOW.")
             self.strategy.state = State.HALTED
             return
         qty = sum(q for q, _ in fills)
@@ -510,6 +512,7 @@ class Engine:
         pos = self.strategy.pos
         self._sl_oid = None
         self.strategy.on_exit_filled(price, ts, reason)
+        self._record_fill("exit", pos.contract, pos.qty, price, ts)
         self._log_trade({"event": "exit", "symbol": pos.contract.symbol, "qty": pos.qty, "price": price,
                          "reason": reason, "ts": ts.isoformat(), "day_pnl": round(self.risk.realised, 2)})
 
@@ -520,6 +523,15 @@ class Engine:
             self.say("WARN", f"Cancel {oid} failed: {e}")
 
     # --------------------------------------------------------------- reporting
+    def _record_fill(self, event: str, contract, qty: int, price: float, ts: datetime) -> None:
+        if not self.on_fill:
+            return
+        try:
+            self.on_fill({"event": event, "contract": contract, "qty": int(qty),
+                          "price": float(price), "ts": ts, "name": self.cfg.instrument})
+        except Exception:
+            log.exception("could not forward built-in algo fill to the trading journal")
+
     def _log_trade(self, rec: dict) -> None:
         try:
             d = Path(self.cfg.data_dir)

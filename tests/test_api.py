@@ -305,14 +305,15 @@ def test_strategy_crud_validate_and_plain_english(env):
     assert c.post("/api/strategies", json={"spec": {"name": "x"}}).json()["ok"] is False
     sid = c.post("/api/strategies", json={"spec": _spec()}).json()["id"]
     rows = c.get("/api/strategies").json()["strategies"]
-    assert rows[0]["id"] == sid and rows[0]["valid"] and not rows[0]["running"]
+    row = next(r for r in rows if r["id"] == sid)
+    assert row["valid"] and not row["running"]
     s2 = _spec()
     s2["name"] = "Renamed"
     assert c.put(f"/api/strategies/{sid}", json={"spec": s2}).json()["ok"]
     assert c.get(f"/api/strategies/{sid}").json()["strategy"]["name"] == "Renamed"
     assert c.get("/api/strategies/999").status_code == 404
     assert c.delete(f"/api/strategies/{sid}").json()["ok"]
-    assert c.get("/api/strategies").json()["strategies"] == []
+    assert all(r["id"] != sid for r in c.get("/api/strategies").json()["strategies"])
 
 
 def test_strategy_lifecycle_and_stop_all(env):

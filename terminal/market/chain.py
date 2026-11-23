@@ -1,13 +1,12 @@
-"""
-Option chain + open-interest analysis.
+"""Option-chain and open-interest analysis shared by the sample and Angel One providers.
 
   provider  gives a raw snapshot of one chain (strikes, call/put legs with price and open interest)
-              - SampleChainProvider: invented, deterministic OI shape, prices move with the sample feed
-              - KotakChainProvider:  Kotak's option_chain() / expiries() REST calls
-  service   caches snapshots, overlays the LIVE prices/OI from the quote hub, and derives the analysis:
-            ATM, PCR, max pain, largest call/put OI strikes, ATM straddle, per-leg OI build-up label.
+              - SampleChainProvider: deterministic invented OI and sample prices
+              - AngelOneChainProvider: instrument-master contracts plus FULL quote and OI batches
+  service   caches snapshots, overlays live prices/OI from the quote hub, and derives ATM, PCR,
+            max pain, largest call/put OI strikes, ATM straddle and per-leg OI buildup labels.
 
-Everything derived here is arithmetic on the numbers shown; it is not a trading signal.
+Everything derived here is arithmetic on the displayed data; it is not a trading signal.
 """
 from __future__ import annotations
 
@@ -27,7 +26,7 @@ from .models import Instrument
 
 log = logging.getLogger("chain")
 
-# name, label, kotak exchange segment, cash-segment spot key
+# name, label, Angel One exchange segment, cash-segment spot key
 INDEX_UNDERLYINGS = [
     {"name": "NIFTY", "label": "Nifty 50", "fo": "nse_fo", "spot_key": "nse_cm|Nifty 50", "step": 50},
     {"name": "BANKNIFTY", "label": "Nifty Bank", "fo": "nse_fo", "spot_key": "nse_cm|Nifty Bank", "step": 100},
@@ -55,7 +54,7 @@ class RawChain:
     lot: int
     spot_key: str | None
     spot: float | None               # as of the REST snapshot (may be None)
-    atm_hint: float | None           # strike Kotak flagged ATM, if any
+    atm_hint: float | None           # strike the provider flagged ATM, if any
     rows: dict[float, dict[str, Leg]] = field(default_factory=dict)      # strike -> {"CE": Leg, "PE": Leg}
     fetched: float = field(default_factory=time.time)
 
@@ -280,254 +279,6 @@ COMMODITY_ALIASES = {
 }
 
 
-# ----------------------------------------------------------------------------------------- Kotak
-class KotakChainProvider:
-    source = "kotak"
-
-    FULL_COUNTS = (200, 100)            # asked first: the whole chain. Kotak wants a multiple of 10 (SDK docs); its default is 40.
-
-    def __init__(self, session, catalog, strike_count: int = 40) -> None:
-        self.s, self.cat, self.count = session, catalog, strike_count
-        self._counts = [c for c in self.FULL_COUNTS if c > strike_count] + [strike_count]
-        self.count_used: int | None = None      # the first count Kotak accepted; remembered so a refusal is not retried every refresh
-
-    def _get_session(self):
-        # 1. Callable getter (e.g. svc.get_valid_kotak_session)
-        if callable(self.s):
-            try:
-                res = self.s()
-                if res and getattr(res, "logged_in", False) and getattr(res, "client", None) is not None:
-                    return res
-            except Exception:
-                pass
-        # 2. Object with session getter or sessions attribute
-        if hasattr(self.s, "get_valid_kotak_session"):
-            try:
-                res = self.s.get_valid_kotak_session()
-                if res and getattr(res, "logged_in", False) and getattr(res, "client", None) is not None:
-                    return res
-            except Exception:
-                pass
-        if hasattr(self.s, "get_session"):
-            try:
-                res = self.s.get_session()
-                if res and getattr(res, "logged_in", False) and getattr(res, "client", None) is not None:
-                    return res
-            except Exception:
-                pass
-        if hasattr(self.s, "sessions") and isinstance(self.s.sessions, dict):
-            for s in self.s.sessions.values():
-                if s and getattr(s, "logged_in", False) and getattr(s, "client", None) is not None:
-                    return s
-        # 3. Direct session instance
-        if getattr(self.s, "logged_in", False) and getattr(self.s, "client", None) is not None:
-            return self.s
-        # 4. Try from catalog's instrument session
-        cat = getattr(self.cat, "inner", self.cat)
-        ins = getattr(cat, "ins", None)
-        sess = getattr(ins, "s", None)
-        if sess:
-            cand = sess() if callable(sess) else sess
-            if cand and getattr(cand, "logged_in", False) and getattr(cand, "client", None) is not None:
-                return cand
-        return None
-
-    def _und(self, und: str) -> str:
-        u = und.strip().upper()
-        return COMMODITY_ALIASES.get(u, u)
-
-    def underlyings(self) -> list[dict]:
-        return INDEX_UNDERLYINGS
-
-    def _fo(self):
-        """The Kotak catalog behind the lazy wrapper, or None if it cannot list F&O names."""
-        cat = getattr(self.cat, "inner", self.cat)
-        return cat if hasattr(cat, "fo_underlyings") else None
-
-    def _mcx(self):
-        cat = getattr(self.cat, "inner", self.cat)
-        return cat if hasattr(cat, "mcx_underlyings") else None
-
-    def _mcx_known(self, und: str) -> bool:
-        cat = self._mcx()
-        if cat is None:
-            return False
-        try:
-            return und in cat.mcx_names()
-        except Exception:
-            return False
-
-    def search(self, q: str, limit: int = 12) -> list[dict]:
-        q = q.strip().upper()
-        hits = [{"name": u["name"], "label": u["label"], "lot": None, "kind": "index"} for u in INDEX_UNDERLYINGS
-                if q in u["name"] or q in u["label"].upper()]
-        mc = self._mcx()
-        if mc is not None:
-            try:
-                hits += [{**c, "kind": "commodity"} for c in mc.mcx_underlyings(q, limit)]
-            except Exception as e:
-                log.warning("commodity search failed: %r", e)
-        cat = self._fo()
-        if cat is None:
-            return hits[:limit]
-        try:
-            stocks = cat.fo_underlyings(q, limit)
-        except Exception as e:
-            raise ChainUnavailable(f"The F&O instrument list is not available yet ({type(e).__name__}). Try again in a few seconds.") from None
-        seen = {h["name"] for h in hits}
-        hits += [{**s, "kind": "stock"} for s in stocks if s["name"] not in seen]
-        return hits[:limit]
-
-    def check(self, und: str) -> None:
-        target = self._und(und)
-        if any(u["name"] == target for u in INDEX_UNDERLYINGS) or self._mcx_known(target) or cmd.is_commodity(target):
-            return
-        cat = self._fo()
-        if cat is None:
-            return
-        try:
-            known = cat.fo_names()
-        except Exception:
-            return                                            # cannot check: let Kotak answer
-        if target not in known:
-            raise ChainUnavailable(f"{target} is not in Kotak's F&O list (no options are listed for it). Use the search box to find the exact name.")
-
-    def _client(self):
-        sess = self._get_session()
-        if not sess or not getattr(sess, "logged_in", False) or getattr(sess, "client", None) is None:
-            raise ChainUnavailable("Not connected to Kotak yet.")
-        return sess.client
-
-    @staticmethod
-    def _check(resp: Any, what: str) -> dict:
-        if not isinstance(resp, dict):
-            raise ChainUnavailable(f"Kotak returned an unreadable {what} reply.")
-        if resp.get("rateLimit") is not None:
-            raise ChainUnavailable("Kotak is rate-limiting option-chain requests. Wait a few seconds.")
-        err = resp.get("error") or resp.get("Error")
-        if err:
-            msg = err[0].get("message") if isinstance(err, list) and err and isinstance(err[0], dict) else str(err)
-            raise ChainUnavailable(f"Kotak could not return the {what}: {str(msg)[:160]}")
-        return resp
-
-    def _exchange(self, und: str) -> str:
-        target = self._und(und)
-        u = next((u for u in INDEX_UNDERLYINGS if u["name"] == target), None)
-        if u:
-            return u["fo"]
-        return cmd.SEGMENT if (self._mcx_known(target) or cmd.is_commodity(target)) else "nse_fo"
-
-    def expiries(self, und: str) -> list[str]:
-        target = self._und(und)
-        ex = self._exchange(target)
-        r = self._check(self._client().expiries(exchange=ex, underlying=target, instrument_type="option"), "expiry list")
-        out = r.get("expiries") or (r.get("data") or {}).get("expiries") or []
-        return sorted(d for d in (self._iso(x, ex) for x in out) if d)
-
-    @staticmethod
-    def _iso(x: Any, segment: str) -> str | None:
-        """An expiry as YYYY-MM-DD. Kotak's date format is not documented for every segment (MCX/BSE may send Unix seconds), so be tolerant."""
-        t = str(x).strip()
-        if len(t) >= 10 and t[4:5] == "-" and t[7:8] == "-":
-            return t[:10]
-        from ..brokers.kotak import parse_expiry
-        d = parse_expiry(t, now_ist().date(), segment)
-        return d.isoformat() if d else None
-
-    def _spot_key(self, und: str, expiry: str | None = None) -> str | None:
-        target = self._und(und)
-        u = next((u for u in INDEX_UNDERLYINGS if u["name"] == target), None)
-        if u:
-            return u["spot_key"]
-        if self._mcx_known(target) or cmd.is_commodity(target):                              # an option on a future: the future is the "spot"
-            try:
-                mc = self._mcx()
-                if mc is not None:
-                    fut = mc.mcx_future(target, date.fromisoformat(expiry[:10]) if expiry else None)
-                    return fut.key if fut else None
-            except Exception:
-                return None
-            return None
-        try:                                                  # a stock: its cash-market instrument
-            hit = next((i for i in self.cat.search(target, 5) if i.kind == "EQ" and i.name == target and i.segment == "nse_cm"), None)
-            return hit.key if hit else None
-        except Exception:
-            return None
-
-    def _option_chain(self, und: str, expiry: str | None) -> dict:
-        """option_chain() for as many strikes as Kotak will give: 200, then 100, then 40. Only a refusal moves to the next size."""
-        target = self._und(und)
-        kw: dict[str, Any] = {"exchange": self._exchange(target), "underlying": target, "instrument_type": "option"}
-        if expiry:
-            kw["expiry"] = expiry
-        counts = [self.count_used] if self.count_used else self._counts
-        last: ChainUnavailable | None = None
-        for n in counts:
-            try:
-                r = self._check(self._client().option_chain(**kw, count=n), "option chain")
-            except ChainUnavailable as e:
-                if "rate-limiting" in str(e) or "Not connected" in str(e):
-                    raise
-                last = e
-                continue
-            if n == counts[0] or self.count_used is None:
-                self.count_used = n
-            return r
-        raise last or ChainUnavailable(f"Kotak returned no option chain for {target}.")
-
-    def fetch(self, und: str, expiry: str | None) -> RawChain:
-        target = self._und(und)
-        r = self._option_chain(target, expiry)
-        log.info("Kotak option_chain reply for %s: %s", target, str(r)[:300])
-        d = r.get("data") if isinstance(r.get("data"), dict) else r
-        common = d.get("common_data") or {}
-        lot = int(_f(common.get("mktLot")) or 0)
-        if lot <= 0:
-            mc = self._mcx()
-            if mc is not None:
-                try:
-                    lot = int(mc.mcx_names().get(target, {}).get("lot") or 0)
-                except Exception:
-                    lot = 0
-            if lot <= 0:
-                lot = 10 if target in ("CRUDEOILM", "CRUDEM", "CRUDEMINI", "GOLDM") else (5 if target in ("SILVERM", "SILVERMINI") else 1)
-        if target in ("CRUDEOILM", "CRUDEM", "CRUDEMINI") and lot != 10:
-            lot = 10
-        if target in ("SILVERM", "SILVERMINI") and lot > 5:
-            lot = 5
-        exp_iso = (self._iso(common.get("expiryDt"), self._exchange(target)) if common.get("expiryDt") else None) or (expiry or "")[:10]
-        spot_dict = d.get("spot") or {}
-        fut_dict = d.get("future") or {}
-        spot_val = _f(spot_dict.get("ltp")) or _f(fut_dict.get("ltp"))
-        raw = RawChain(target, exp_iso, lot, self._spot_key(target, exp_iso or expiry), spot_val, None)
-        for side, kind in (("call", "CE"), ("put", "PE")):
-            for it in d.get(side) or []:
-                ins = it.get("inst") or it.get("instrument") or {}
-                q = it.get("quote") or {}
-                oi = it.get("oi") or it.get("openInterest") or {}
-                strike = _f(ins.get("strkPrc")) or _f(ins.get("strikePrice"))
-                key = ins.get("neoSymbol") or ins.get("token")
-                if strike is None or not key:
-                    continue
-                key_str = str(key)
-                if "|" not in key_str:
-                    key_str = f"{self._exchange(target)}|{key_str}"
-                if str(ins.get("moneyness", "")).upper() == "ATM":
-                    raw.atm_hint = strike
-                raw.rows.setdefault(strike, {})[kind] = Leg(
-                    key_str,
-                    str(ins.get("symbol") or ""),
-                    _f(q.get("ltp")),
-                    _f(q.get("pc")) or _f(q.get("prevClose")),
-                    _f(oi.get("cur")) or _f(oi.get("current")),
-                    _f(oi.get("prev")) or _f(oi.get("previous")),
-                    _f(q.get("vol")) or _f(q.get("volume")),
-                )
-        if not raw.rows:
-            raise ChainUnavailable("Kotak returned an empty option chain. The market may be closed or the name may be wrong.")
-        return raw
-
-
 # --------------------------------------------------------------------------------------- service
 class ChainService:
     OWNER = "chain"
@@ -557,7 +308,7 @@ class ChainService:
     def search(self, q: str, limit: int = 12) -> list[dict]:
         """Any underlying that has options (indices and F&O stocks) whose name starts with, or whose company name contains, q."""
         if not self.provider:
-            raise ChainUnavailable("Not connected to Kotak yet.")
+            raise ChainUnavailable("Connect the Angel One account or switch to Sample mode first.")
         return self.provider.search(q, limit) if q.strip() and hasattr(self.provider, "search") else []
 
     def expiries(self, und: str) -> list[str]:

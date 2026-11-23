@@ -1,25 +1,26 @@
-"""Angel One SmartAPI primitives.
+"""Angel One SmartAPI adapters for authentication, instruments, market data and orders.
 
-This module is intentionally isolated from the existing engine interfaces until the
-service/account lifecycle migration is completed. It provides authenticated REST,
-instrument-master parsing, market-stream and order/account operations.
-Never enable live mode until the service wiring and live-account validation are done.
+Services wires these adapters into the existing terminal and strategy engine. Live
+execution still requires CI, paper-mode and broker-runtime verification before release.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
 import threading
+from collections import deque
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Callable
+from urllib.parse import urljoin
 
 import pyotp
 import requests
 
-from ..models import Contract, OrderError, OrderRequest, OrderStatus, Tick
+from ..models import Contract, OrderError, OrderRequest, OrderStatus, OrderUnknown, Tick
 from ..clock import now_ist
 from .base import Subscription
 
@@ -43,6 +44,13 @@ def _num(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _bearer_token(value: Any) -> str:
+    token = str(value or "").strip()
+    if not token:
+        return ""
+    return "Bearer " + token[7:].strip() if token.lower().startswith("bearer ") else "Bearer " + token
+
+
 def _ok(response: Any, action: str) -> dict:
     if not isinstance(response, dict) or response.get("status") is not True:
         message = response.get("message") if isinstance(response, dict) else str(response)
@@ -52,7 +60,7 @@ def _ok(response: Any, action: str) -> dict:
 
 
 class AngelOneSession:
-    """One SmartAPI session. Credentials are read from environment and never logged."""
+    """One SmartAPI session. Credentials are supplied from the encrypted account vault or server environment and never logged."""
 
     def __init__(self, env=os.environ):
         self.api_key = env.get("ANGEL_API_KEY", "").strip()
@@ -66,9 +74,17 @@ class AngelOneSession:
         self.profile: dict = {}
         self.my_ip = ""
 
+    @property
+    def logged_in(self) -> bool:
+        return self.client is not None and bool(self.jwt_token and self.feed_token)
+
+    def _mark_session_expired(self) -> None:
+        self.jwt_token = self.refresh_token = self.feed_token = ""
+        self.profile = {}
+
     def login(self, totp: str | None = None) -> None:
         if not all((self.api_key, self.client_code, self.pin)):
-            raise RuntimeError("Set ANGEL_API_KEY, ANGEL_CLIENT_CODE and ANGEL_PIN in the server environment.")
+            raise RuntimeError("Configure the Angel One API Key, Client Code and PIN in Settings or the server environment.")
         code = (totp or "").strip()
         if not code and self.totp_secret:
             code = pyotp.TOTP(self.totp_secret).now()
@@ -76,23 +92,76 @@ class AngelOneSession:
             raise RuntimeError("Enter the current six-digit Angel One TOTP.")
         try:
             from SmartApi import SmartConnect
+            import SmartApi.smartConnect as smart_connect_module
+            # The SDK logs request headers (including X-PrivateKey and Authorization)
+            # on transport failures. Suppress those raw logs; the terminal reports
+            # sanitized errors after removing configured credentials.
+            sdk_logger = getattr(smart_connect_module, "logger", None)
+            if sdk_logger is not None and hasattr(sdk_logger, "setLevel"):
+                sdk_logger.setLevel(logging.CRITICAL)
         except ImportError as exc:
             raise RuntimeError("Angel One SDK is missing. Install smartapi-python.") from exc
         client = SmartConnect(api_key=self.api_key)
-        response = client.generateSession(self.client_code, self.pin, code)
-        data = _ok(response, "login")
-        self.jwt_token = str(data.get("jwtToken") or "")
-        self.refresh_token = str(data.get("refreshToken") or "")
-        self.feed_token = str(client.getfeedToken() or data.get("feedToken") or "")
-        if not self.jwt_token or not self.feed_token:
-            raise RuntimeError("Angel One login returned an incomplete session.")
-        self.client = client
-        profile = client.getProfile(self.refresh_token)
-        self.profile = _ok(profile, "profile")
+        try:
+            response = client.generateSession(self.client_code, self.pin, code)
+            data = _ok(response, "login")
+            self.jwt_token = _bearer_token(data.get("jwtToken"))
+            self.refresh_token = str(data.get("refreshToken") or "")
+            self.feed_token = str(client.getfeedToken() or data.get("feedToken") or "")
+            if not self.jwt_token or not self.refresh_token or not self.feed_token:
+                raise RuntimeError("Angel One login returned an incomplete session.")
+            self.client = client
+            set_expiry_hook = getattr(client, "setSessionExpiryHook", None)
+            if callable(set_expiry_hook):
+                set_expiry_hook(self._mark_session_expired)
+            self.profile = _ok(client.getProfile(self.refresh_token), "profile")
+        except Exception:
+            self.client = None
+            self.jwt_token = self.refresh_token = self.feed_token = ""
+            self.profile = {}
+            try:
+                client.terminateSession(self.client_code)
+            except Exception:
+                pass
+            raise
+
+    def refresh(self) -> None:
+        """Refresh the REST JWT using the SDK refresh token and rotate the feed token."""
+        client = self.require_client()
+        if not self.refresh_token:
+            raise RuntimeError("Angel One refresh token is unavailable; reconnect the account.")
+        try:
+            response = client.generateToken(self.refresh_token)
+            data = _ok(response, "token refresh")
+            jwt_token = _bearer_token(data.get("jwtToken") or self.jwt_token)
+            refresh_token = str(data.get("refreshToken") or self.refresh_token)
+            feed_token = str(client.getfeedToken() or data.get("feedToken") or self.feed_token)
+            if not jwt_token or not feed_token:
+                raise RuntimeError("Angel One token refresh returned an incomplete session.")
+            self.jwt_token, self.refresh_token, self.feed_token = jwt_token, refresh_token, feed_token
+        except Exception as exc:
+            # SmartAPI logs sessions out daily; a failed refresh requires a fresh TOTP login.
+            self.jwt_token = self.feed_token = self.refresh_token = ""
+            raise RuntimeError("Angel One session expired or token refresh failed. Reconnect the account with a current TOTP.") from exc
+
+    def ensure_fresh(self, skew_seconds: int = 120) -> None:
+        """Refresh the REST/feed tokens shortly before the JWT expires."""
+        token = self.jwt_token.removeprefix("Bearer ").strip()
+        parts = token.split(".")
+        if len(parts) != 3:
+            return
+        try:
+            payload = parts[1] + "=" * (-len(parts[1]) % 4)
+            claims = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
+            expires_at = float(claims.get("exp") or 0)
+        except Exception:
+            return
+        if expires_at and expires_at <= time.time() + max(0, skew_seconds):
+            self.refresh()
 
     def require_client(self):
-        if self.client is None:
-            raise RuntimeError("Angel One account is not connected.")
+        if not self.logged_in:
+            raise RuntimeError("Angel One account session is not active. Reconnect with a current TOTP.")
         return self.client
 
     def logout(self) -> None:
@@ -117,7 +186,7 @@ class AngelOneInstruments:
 
     def load(self, force: bool = False) -> None:
         with self._lock:
-            if self._rows and not force and time.time() - self._loaded_at < self.cache_seconds:
+            if self._loaded_at and not force and time.time() - self._loaded_at < self.cache_seconds:
                 return
             response = requests.get(MASTER_URL, timeout=30)
             response.raise_for_status()
@@ -133,17 +202,61 @@ class AngelOneInstruments:
                     indexed[f"{segment}|{token}"] = row
             self._rows, self._by_key, self._loaded_at = rows, indexed, time.time()
 
+    @staticmethod
+    def _expiry(value: Any) -> date | None:
+        raw = str(value or "").strip().upper()
+        for fmt in ("%d%b%Y", "%d-%b-%Y", "%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(raw, fmt).date()
+            except ValueError:
+                continue
+        return None
+
     def index_subscription(self, instrument: str) -> Subscription:
-        # Index token aliases are account/instrument-master dependent; require configured token.
+        """Resolve an index's real numeric token from the downloaded Angel One master."""
+        self.load()
         configured = getattr(self.cfg, "dashboard_indices", []) if self.cfg else []
-        for item in configured:
-            if str(item.get("label", "")).upper() == instrument.upper():
-                seg = str(item["segment"]).lower()
-                token = str(item["token"])
-                if seg not in SEGMENT_TO_WS:
-                    break
-                return Subscription(seg, token, "INDEX")
-        raise RuntimeError(f"Configure the Angel One exchange token for index {instrument!r} in dashboard_indices.")
+        aliases = {
+            "NIFTY 50": {"NIFTY", "NIFTY 50"},
+            "NIFTY BANK": {"BANKNIFTY", "NIFTY BANK"},
+            "NIFTY FIN SERVICE": {"FINNIFTY", "NIFTY FIN SERVICE"},
+            "NIFTY MID SELECT": {"MIDCPNIFTY", "NIFTY MID SELECT"},
+            "INDIA VIX": {"INDIA VIX", "INDIAVIX"},
+            "SENSEX": {"SENSEX"},
+        }
+        wanted = instrument.upper().strip()
+        item = next((x for x in configured
+                     if wanted == str(x.get("label", "")).upper()
+                     or wanted in aliases.get(str(x.get("label", "")).upper(), set())), None)
+        if item is None:
+            raise RuntimeError(f"Index {instrument!r} is not configured in dashboard_indices.")
+        segment = str(item.get("segment", "")).lower()
+        exchange = SEGMENT_TO_EXCHANGE.get(segment)
+        if not exchange:
+            raise RuntimeError(f"Unsupported index exchange segment: {segment!r}")
+        hints = {str(item.get("token", "")).strip().upper(), str(item.get("label", "")).strip().upper()}
+        hints.update(aliases.get(str(item.get("label", "")).upper(), set()))
+        hints.add(wanted)
+        matches = []
+        for row in self._rows:
+            if str(row.get("exch_seg", "")).upper() != exchange:
+                continue
+            if str(row.get("instrumenttype", "")).upper() not in ("AMXIDX", ""):
+                continue
+            token = str(row.get("token", "")).strip()
+            if not token.isdigit():
+                continue
+            symbol = str(row.get("symbol", "")).strip().upper()
+            name = str(row.get("name", "")).strip().upper()
+            if symbol in hints or name in hints or f"{name} {symbol}" in hints:
+                matches.append(row)
+        if not matches:
+            raise RuntimeError(f"Angel One instrument master has no verified token for index {instrument!r} on {exchange}.")
+        # Prefer an exact symbol match; never send the configured display label as a token.
+        matches.sort(key=lambda r: (str(r.get("symbol", "")).upper() not in hints,
+                                    str(r.get("name", "")).upper() not in hints))
+        token = str(matches[0]["token"])
+        return Subscription(segment, token, "INDEX")
 
     def get_row(self, key: str) -> dict | None:
         self.load()
@@ -154,15 +267,7 @@ class AngelOneInstruments:
         if not row:
             raise RuntimeError(f"Instrument {key!r} is not present in the Angel One master.")
         seg, token = key.split("|", 1)
-        expiry_raw = str(row.get("expiry") or "")
-        expiry = None
-        if expiry_raw:
-            for fmt in ("%d%b%Y", "%d-%b-%Y", "%Y-%m-%d"):
-                try:
-                    expiry = datetime.strptime(expiry_raw.upper(), fmt).date()
-                    break
-                except ValueError:
-                    pass
+        expiry = self._expiry(row.get("expiry"))
         opt = str(row.get("opttype") or "").upper()
         if opt not in ("CE", "PE"):
             raise RuntimeError(f"{key} is not an option contract.")
@@ -181,9 +286,8 @@ class AngelOneInstruments:
                 continue
             if str(row.get("name", "")).upper() != instrument.upper():
                 continue
-            try:
-                exp = datetime.strptime(str(row.get("expiry", "")).upper(), "%d%b%Y").date()
-            except ValueError:
+            exp = self._expiry(row.get("expiry"))
+            if exp is None:
                 continue
             if exp >= today:
                 rows.append((exp, row))
@@ -213,42 +317,152 @@ class AngelOneInstruments:
 
 
 class AngelOneFeed:
-    """SmartWebSocketV2 feed adapter; LTP values arrive in paise and are normalized to rupees."""
+    """SmartWebSocketV2 feed with a supervised reconnect loop and subscription replay."""
 
-    def __init__(self, session: AngelOneSession, cfg=None):
+    def __init__(self, session: AngelOneSession, cfg=None, reconnect_min_s: float = 1.0,
+                 reconnect_max_s: float = 30.0):
         self.session, self.cfg = session, cfg
         self._ws = None
         self._on_tick: Callable[[Tick], None] | None = None
         self._subscriptions: dict[tuple[str, str], str] = {}
         self._lock = threading.RLock()
         self._thread = None
+        self._stop = threading.Event()
+        self._connected = threading.Event()
+        self._reconnect_min_s = max(0.2, reconnect_min_s)
+        self._reconnect_max_s = max(self._reconnect_min_s, reconnect_max_s)
+        self._correlation_id = "goldeneagl"
+        self._mode = 2
+
+    @property
+    def connected(self) -> bool:
+        return self._connected.is_set()
+
+    def wait_connected(self, timeout: float = 15.0) -> bool:
+        """Wait for the first WebSocket open callback; reconnect supervision continues afterwards."""
+        return self._connected.wait(max(0.0, float(timeout)))
 
     def start(self, on_tick: Callable[[Tick], None]) -> None:
+        if not self.session.jwt_token or not self.session.feed_token:
+            raise RuntimeError("Log in to Angel One before starting the market feed.")
         self._on_tick = on_tick
-        self._connect()
-
-    def _connect(self):
-        from SmartApi.smartWebSocketV2 import SmartWebSocketV2
-        s = self.session
-        self._ws = SmartWebSocketV2(s.jwt_token, s.api_key, s.client_code, s.feed_token)
-        self._ws.on_data = self._on_data
-        self._ws.on_error = lambda ws, err: log.error("Angel One market stream error: %s", err)
-        self._ws.on_close = lambda ws: log.warning("Angel One market stream closed")
-        self._thread = threading.Thread(target=self._ws.connect, name="angel-one-feed", daemon=True)
+        self._stop.clear()
+        if self._thread and self._thread.is_alive():
+            return
+        self._thread = threading.Thread(target=self._run, name="angel-one-feed-supervisor", daemon=True)
         self._thread.start()
 
-    def subscribe(self, subs: list[Subscription]) -> None:
+    def _run(self) -> None:
+        delay = self._reconnect_min_s
+        while not self._stop.is_set():
+            self._attempt_opened = False
+            try:
+                from SmartApi.smartWebSocketV2 import SmartWebSocketV2
+                # SmartAPI SDK stores subscription replay state on the class. Reset it
+                # for each supervised socket; our own subscription map is authoritative.
+                SmartWebSocketV2.input_request_dict = {}
+                SmartWebSocketV2.RESUBSCRIBE_FLAG = False
+                s = self.session
+                if not getattr(s, "logged_in", True):
+                    self._connected.clear()
+                    self._stop.wait(5)
+                    continue
+                ensure_fresh = getattr(s, "ensure_fresh", None)
+                if callable(ensure_fresh):
+                    ensure_fresh()
+                class VerifiedSmartWebSocketV2(SmartWebSocketV2):
+                    """Use the SDK packet parser while retaining normal TLS certificate verification."""
+                    def connect(inner_self):
+                        import ssl
+                        import websocket
+                        headers = {
+                            "Authorization": inner_self.auth_token,
+                            "x-api-key": inner_self.api_key,
+                            "x-client-code": inner_self.client_code,
+                            "x-feed-token": inner_self.feed_token,
+                        }
+                        inner_self.wsapp = websocket.WebSocketApp(
+                            inner_self.ROOT_URI, header=headers,
+                            on_open=inner_self._on_open, on_error=inner_self._on_error,
+                            on_close=inner_self._on_close, on_data=inner_self._on_data,
+                            on_ping=inner_self._on_ping, on_pong=inner_self._on_pong,
+                        )
+                        # The upstream SDK disables TLS certificate verification. Use the
+                        # system trust store so broker credentials cannot be sent to a MITM.
+                        inner_self.wsapp.run_forever(
+                            sslopt={"context": ssl.create_default_context()},
+                            ping_interval=inner_self.HEART_BEAT_INTERVAL,
+                        )
+
+                ws = VerifiedSmartWebSocketV2(
+                    s.jwt_token, s.api_key, s.client_code, s.feed_token,
+                    max_retry_attempt=0,
+                )
+                with self._lock:
+                    self._ws = ws
+                ws.on_open = self._on_open
+                ws.on_data = self._on_data
+                ws.on_error = self._on_error
+                ws.on_close = self._on_close
+                # connect() blocks until the socket closes in the SmartAPI SDK.
+                ws.connect()
+            except Exception:
+                if not self._stop.is_set():
+                    log.exception("Angel One WebSocket connection failed")
+            finally:
+                opened = bool(getattr(self, "_attempt_opened", False))
+                self._connected.clear()
+                with self._lock:
+                    old, self._ws = self._ws, None
+                if old is not None:
+                    try:
+                        old.close_connection()
+                    except Exception:
+                        pass
+            delay = self._reconnect_min_s if opened else min(self._reconnect_max_s, delay * 2)
+            if self._stop.wait(delay):
+                break
+
+    def _on_open(self, ws) -> None:
+        self._attempt_opened = True
+        self._connected.set()
+        log.info("Angel One market stream connected")
+        self._replay_subscriptions(ws)
+
+    def _on_error(self, ws, error) -> None:
+        self._connected.clear()
+        log.warning("Angel One market stream error: %s", error)
+
+    def _on_close(self, ws) -> None:
+        self._connected.clear()
+        log.warning("Angel One market stream closed")
+
+    def _replay_subscriptions(self, ws=None) -> None:
+        target = ws or self._ws
+        if target is None:
+            return
         grouped: dict[int, list[str]] = {}
         with self._lock:
+            for (segment, token) in self._subscriptions:
+                exchange_type = SEGMENT_TO_WS.get(segment)
+                if exchange_type is not None:
+                    grouped.setdefault(exchange_type, []).append(token)
+        for exchange_type, tokens in grouped.items():
+            target.subscribe(self._correlation_id, self._mode, [
+                {"exchangeType": exchange_type, "tokens": sorted(set(tokens))}
+            ])
+
+    def subscribe(self, subs: list[Subscription]) -> None:
+        with self._lock:
             for sub in subs:
-                ex = SEGMENT_TO_WS.get(sub.segment)
-                if ex is None:
-                    continue
-                grouped.setdefault(ex, []).append(str(sub.token))
+                if sub.segment not in SEGMENT_TO_WS:
+                    raise ValueError(f"Unsupported Angel One segment: {sub.segment}")
+                if not str(sub.token).strip().isdigit():
+                    raise ValueError(f"Invalid Angel One instrument token: {sub.token!r}")
                 self._subscriptions[(sub.segment, str(sub.token))] = sub.symbol
-        if self._ws and grouped:
-            token_list = [{"exchangeType": ex, "tokens": sorted(set(tokens))} for ex, tokens in grouped.items()]
-            self._ws.subscribe("golden-eagle", 1, token_list)
+            ws = self._ws
+        if ws is not None and self.connected:
+            self._replay_subscriptions(ws)
 
     def subscribe_keys(self, keys: list[str]) -> None:
         subs = []
@@ -261,80 +475,256 @@ class AngelOneFeed:
     def _on_data(self, ws, message):
         if not isinstance(message, dict):
             return
-        token = str(message.get("token") or "")
-        ex = int(_num(message.get("exchange_type"), 0))
-        seg = next((k for k, v in SEGMENT_TO_WS.items() if v == ex), None)
-        if not seg:
+        token = str(message.get("token") or "").strip()
+        exchange_type = int(_num(message.get("exchange_type"), 0))
+        segment = next((k for k, v in SEGMENT_TO_WS.items() if v == exchange_type), None)
+        if not segment:
             return
         with self._lock:
-            symbol = self._subscriptions.get((seg, token))
+            symbol = self._subscriptions.get((segment, token))
+        # SmartAPI sends last_traded_price in paise (1/100 rupee).
         price = _num(message.get("last_traded_price")) / 100
         if symbol and price > 0 and self._on_tick:
-            self._on_tick(Tick(symbol, price, now_ist()))
+            try:
+                self._on_tick(Tick(
+                    symbol, price, now_ist(),
+                    prev_close=(_num(message.get("closed_price")) / 100) or None,
+                    open=(_num(message.get("open_price_of_the_day")) / 100) or None,
+                    high=(_num(message.get("high_price_of_the_day")) / 100) or None,
+                    low=(_num(message.get("low_price_of_the_day")) / 100) or None,
+                    volume=int(_num(message.get("volume_trade_for_the_day"))) or None,
+                    oi=int(_num(message.get("open_interest"))) or None,
+                ))
+            except Exception:
+                log.exception("Angel One tick callback failed")
 
     def stop(self) -> None:
-        if self._ws:
+        self._stop.set()
+        self._connected.clear()
+        with self._lock:
+            ws, self._ws = self._ws, None
+        if ws is not None:
             try:
-                self._ws.close_connection()
+                ws.close_connection()
             except Exception:
                 log.exception("Error closing Angel One feed")
-        self._ws = None
+        thread = self._thread
+        if thread and thread is not threading.current_thread():
+            thread.join(timeout=5)
+        self._thread = None
+
+class SlidingWindowRateLimiter:
+    """Thread-safe rolling-window limiter shared by all adapters for one API key."""
+
+    def __init__(self, limit: int, window_seconds: float = 1.0):
+        self.limit = int(limit)
+        self.window_seconds = float(window_seconds)
+        self._lock = threading.Lock()
+        self._calls = deque()
+
+    def acquire(self) -> None:
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                while self._calls and now - self._calls[0] >= self.window_seconds:
+                    self._calls.popleft()
+                if len(self._calls) < self.limit:
+                    self._calls.append(now)
+                    return
+                wait = max(0.001, self.window_seconds - (now - self._calls[0]))
+            time.sleep(wait)
+
+
+# SmartAPI limits are per API key; share these across the gateway and strategy engine.
+_ANGEL_ORDER_MUTATIONS = SlidingWindowRateLimiter(9, 1.0)
+_ANGEL_ORDER_BOOK = SlidingWindowRateLimiter(1, 1.0)
+_ANGEL_TRADE_BOOK = SlidingWindowRateLimiter(1, 1.0)
+_ANGEL_INDIVIDUAL_STATUS = SlidingWindowRateLimiter(10, 1.0)
 
 
 class AngelOneOrders:
     """SmartAPI order and account operations. Quantities are units, not lots."""
 
-    def __init__(self, session: AngelOneSession, instruments: AngelOneInstruments, cfg=None):
+    def __init__(self, session: AngelOneSession, instruments: AngelOneInstruments, cfg=None, ip_check=None):
         self.session, self.instruments, self.cfg = session, instruments, cfg
+        self.ip_check = ip_check
+        self._unique_order_ids: dict[str, str] = {}
+
+    def _ensure_order_ip(self) -> None:
+        if self.ip_check:
+            problem = self.ip_check()
+            if problem:
+                raise OrderError("Angel One order action blocked: " + str(problem))
+        _ANGEL_ORDER_MUTATIONS.acquire()
+
+    def _remember_order_ids(self, row: Any) -> None:
+        if not isinstance(row, dict):
+            return
+        order_id = str(row.get("orderid") or row.get("order_id") or "").strip()
+        unique_id = str(row.get("uniqueorderid") or row.get("unique_order_id") or "").strip()
+        if order_id and unique_id:
+            self._unique_order_ids[order_id] = unique_id
+
+    @staticmethod
+    def _status_from_row(order_id: str, row: dict) -> OrderStatus:
+        raw = str(row.get("orderstatus") or row.get("status") or "").strip().upper().replace("_", " ")
+        state = {"COMPLETE": "COMPLETE", "OPEN": "OPEN", "PENDING": "OPEN",
+                 "TRIGGER PENDING": "TRIGGER_PENDING", "PARTIALLY EXECUTED": "OPEN",
+                 "PARTIALLY FILLED": "OPEN", "MODIFY PENDING": "OPEN",
+                 "AMO REQ RECEIVED": "OPEN", "REJECTED": "REJECTED",
+                 "CANCELLED": "CANCELLED", "CANCELED": "CANCELLED"}.get(raw, "UNKNOWN")
+        return OrderStatus(str(order_id), state,
+                           int(_num(row.get("filledshares") or row.get("filledsharesqty") or row.get("filledquantity"))),
+                           _num(row.get("averageprice") or row.get("average_price") or row.get("avgprice")),
+                           str(row.get("text") or row.get("rejreason") or row.get("reason") or ""))
 
     def place(self, req: OrderRequest) -> str:
+        self._ensure_order_ip()
         row = self.instruments.get_row(f"{req.contract.segment}|{req.contract.token}")
         if not row:
             raise OrderError("Contract is missing from Angel One instrument master.")
-        ordertype = {"MKT": "MARKET", "L": "LIMIT", "SL": "STOPLOSS_LIMIT"}.get(req.order_type)
+        if req.side not in ("B", "S") or req.qty <= 0:
+            raise OrderError("Order side or quantity is invalid.")
+        ordertype = {"MKT": "MARKET", "L": "LIMIT", "SL": "STOPLOSS_LIMIT",
+                     "SL-M": "STOPLOSS_MARKET"}.get(req.order_type)
         if not ordertype:
             raise OrderError(f"Unsupported internal order type: {req.order_type}")
         payload = {
             "variety": "NORMAL", "tradingsymbol": req.contract.symbol,
             "symboltoken": req.contract.token, "transactiontype": "BUY" if req.side == "B" else "SELL",
             "exchange": SEGMENT_TO_EXCHANGE[req.contract.segment], "ordertype": ordertype,
-            "producttype": getattr(self.cfg, "angel_product_type", "INTRADAY"),
-            "duration": "DAY", "price": str(req.price or 0),
+            "producttype": req.product_type,
+            "duration": req.validity, "price": str(req.price or 0),
             "triggerprice": str(req.trigger or 0), "quantity": str(req.qty),
             "squareoff": "0", "stoploss": "0", "ordertag": (req.tag or "GET")[:20],
         }
-        response = self.session.require_client().placeOrder(payload)
-        data = _ok(response, "place order")
-        order_id = data.get("orderid") or data.get("order_id")
-        if not order_id:
-            raise OrderError("Angel One accepted no order id; check order book before retrying.")
-        return str(order_id)
+        client = self.session.require_client()
+        # The official SmartAPI SDK's placeOrder() returns only the order-id string.
+        # placeOrderFullResponse() is preferred so a rejected/ambiguous response is visible.
+        full_response = getattr(client, "placeOrderFullResponse", None)
+        if callable(full_response):
+            response = full_response(payload)
+            if response is None:
+                raise OrderUnknown("Angel One returned no place-order response; check the order book before retrying.")
+            data = _ok(response, "place order")
+            order_id = data.get("orderid") or data.get("order_id")
+            if not order_id:
+                raise OrderUnknown("Angel One returned no order id; check the order book before retrying.")
+            self._remember_order_ids(data)
+            return str(order_id)
+        response = client.placeOrder(payload)
+        if isinstance(response, (str, int)) and str(response).strip():
+            return str(response)
+        if isinstance(response, dict):
+            data = _ok(response, "place order")
+            order_id = data.get("orderid") or data.get("order_id")
+            if order_id:
+                self._remember_order_ids(data)
+                return str(order_id)
+        raise OrderUnknown("Angel One placeOrder returned no order id; check the order book before retrying.")
 
     def cancel(self, order_id: str) -> None:
+        self._ensure_order_ip()
         response = self.session.require_client().cancelOrder(order_id, "NORMAL")
-        _ok(response, "cancel order")
+        self._remember_order_ids(_ok(response, "cancel order"))
 
     def modify(self, order_id: str, payload: dict) -> None:
-        _ok(self.session.require_client().modifyOrder(payload), "modify order")
+        """Modify using the SmartAPI SDK's required orderid-bearing payload."""
+        self._ensure_order_ip()
+        if not isinstance(payload, dict) or not payload.get("orderid"):
+            raise OrderError("Angel One modify requires a complete payload containing orderid.")
+        if str(payload["orderid"]) != str(order_id):
+            raise OrderError("Modify payload orderid does not match the requested order.")
+        self._remember_order_ids(_ok(self.session.require_client().modifyOrder(payload), "modify order"))
+
+    @staticmethod
+    def _list_data(response: Any, action: str) -> list[dict]:
+        data = _ok(response, action)
+        # SmartAPI SDK responses have appeared as either data=[...] or data={"data":[...]}.
+        rows = data.get("data") if isinstance(data, dict) else data
+        if isinstance(rows, dict):
+            rows = rows.get("data")
+        if not isinstance(rows, list):
+            raise OrderError(f"Angel One {action} returned an unreadable list.")
+        return [r for r in rows if isinstance(r, dict)]
+
+    def order_book(self) -> list[dict]:
+        _ANGEL_ORDER_BOOK.acquire()
+        rows = self._list_data(self.session.require_client().orderBook(), "order book")
+        for row in rows:
+            self._remember_order_ids(row)
+        return rows
+
+    def trade_book(self) -> list[dict]:
+        _ANGEL_TRADE_BOOK.acquire()
+        client = self.session.require_client()
+        method = getattr(client, "tradeBook", None) or getattr(client, "tradebook", None)
+        if method is None:
+            raise OrderError("The installed Angel One SDK does not expose tradeBook().")
+        return self._list_data(method(), "trade book")
+
+    @staticmethod
+    def _individual_order_details(client: Any, unique_id: str) -> Any:
+        # The SDK helper omits a timeout; use its authenticated route with the SDK's
+        # session, proxy settings and TLS verification when those are available.
+        reqsession = getattr(client, "reqsession", None)
+        routes = getattr(client, "_routes", {})
+        if reqsession is not None and callable(getattr(reqsession, "get", None)) and isinstance(routes, dict):
+            root = getattr(client, "root", None) or getattr(client, "_rootUrl", "")
+            route = routes.get("api.individual.order.details", "/rest/secure/angelbroking/order/v1/details/")
+            url = urljoin(str(root), str(route)) + str(unique_id)
+            headers = client.requestHeaders()
+            access = str(getattr(client, "access_token", "") or "")
+            headers["Authorization"] = access if access.lower().startswith("bearer ") else "Bearer " + access
+            response = reqsession.get(
+                url, headers=headers, timeout=getattr(client, "timeout", 7),
+                proxies=getattr(client, "proxies", None) or None,
+                verify=not bool(getattr(client, "disable_ssl", False)),
+            )
+            if response.status_code == 403:
+                hook = getattr(client, "session_expiry_hook", None)
+                if callable(hook):
+                    hook()
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, dict) and payload.get("error_type") == "TokenException":
+                hook = getattr(client, "session_expiry_hook", None)
+                if callable(hook):
+                    hook()
+            return payload
+        details = getattr(client, "individual_order_details", None)
+        if callable(details):
+            return details(unique_id)
+        raise OrderError("The installed Angel One SDK does not expose individual order details.")
 
     def status(self, order_id: str) -> OrderStatus:
-        book = self.session.require_client().orderBook()
-        data = _ok(book, "order book")
-        rows = data.get("data") if isinstance(data.get("data"), list) else []
-        row = next((x for x in rows if str(x.get("orderid")) == str(order_id)), None)
+        order_id = str(order_id)
+        unique_id = self._unique_order_ids.get(order_id)
+        client = self.session.require_client()
+        if unique_id:
+            try:
+                _ANGEL_INDIVIDUAL_STATUS.acquire()
+                response = self._individual_order_details(client, unique_id)
+                data = _ok(response, "individual order details")
+                row = data.get("data") if isinstance(data, dict) and "data" in data else data
+                if isinstance(row, list):
+                    row = row[0] if row else None
+                if isinstance(row, dict):
+                    self._remember_order_ids(row)
+                    return self._status_from_row(order_id, row)
+                return OrderStatus(order_id, "UNKNOWN", reason="Angel One returned unreadable individual order details.")
+            except Exception as exc:
+                logger.warning("Angel One individual order status lookup failed (%s).", type(exc).__name__)
+                return OrderStatus(order_id, "UNKNOWN", reason="Angel One individual order status is temporarily unavailable.")
+        rows = self.order_book()
+        row = next((x for x in rows if str(x.get("orderid") or x.get("order_id")) == order_id), None)
         if row is None:
-            return OrderStatus(str(order_id), "UNKNOWN", reason="Order not present in Angel One order book.")
-        raw = str(row.get("orderstatus") or row.get("status") or "").upper()
-        state = {"COMPLETE": "COMPLETE", "OPEN": "OPEN", "PENDING": "OPEN",
-                 "TRIGGER PENDING": "TRIGGER_PENDING", "REJECTED": "REJECTED",
-                 "CANCELLED": "CANCELLED", "CANCELED": "CANCELLED"}.get(raw, "UNKNOWN")
-        return OrderStatus(str(order_id), state, int(_num(row.get("filledshares"))),
-                           _num(row.get("averageprice")), str(row.get("text") or ""))
+            return OrderStatus(order_id, "UNKNOWN", reason="Order not present in Angel One order book.")
+        self._remember_order_ids(row)
+        return self._status_from_row(order_id, row)
 
     def positions(self) -> dict[str, int] | None:
-        response = self.session.require_client().position()
-        data = _ok(response, "positions")
-        rows = data.get("data") if isinstance(data.get("data"), list) else []
+        rows = self._list_data(self.session.require_client().position(), "positions")
         out: dict[str, int] = {}
         for row in rows:
             symbol = str(row.get("tradingsymbol") or "")
@@ -343,9 +733,10 @@ class AngelOneOrders:
         return out
 
     def holdings(self) -> list[dict]:
-        data = _ok(self.session.require_client().holding(), "holdings")
-        return data.get("data", []) if isinstance(data.get("data"), list) else []
+        return self._list_data(self.session.require_client().holding(), "holdings")
 
     def funds(self) -> dict:
         data = _ok(self.session.require_client().rmsLimit(), "funds")
+        if isinstance(data.get("data"), dict):
+            data = data["data"]
         return data
