@@ -590,9 +590,12 @@ class Services:
             return Engine(ecfg, SyntheticInstruments(ecfg, day),
                           ReplayFeed(build_day(day, cfg.demo_scenario, underlying=cfg.inst.underlying)), PaperOrders())
         from .brokers.angel_one import AngelOneOrders
-        if not self._angel_ins or not self.session or not getattr(self.session, "logged_in", False):
+        # The connected session is authoritative. During service construction and
+        # isolated engine tests, fall back to the configured single-account session.
+        session = getattr(self, "session", None) or getattr(self, "_default_session", None)
+        if not self._angel_ins or not session or not getattr(session, "logged_in", False):
             raise RuntimeError("Connect the Angel One account before starting the strategy engine.")
-        orders = PaperOrders() if self.mode == "paper" else AngelOneOrders(self.session, self._angel_ins, cfg)
+        orders = PaperOrders() if self.mode == "paper" else AngelOneOrders(session, self._angel_ins, cfg)
         eng = Engine(cfg, self._angel_ins, HubEngineFeed(self.hub), orders)
         eng.notify = self.alerts.notify
         return eng
