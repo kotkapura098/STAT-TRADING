@@ -77,7 +77,8 @@ export function AccountsPanel() {
     <div className="panel-b stack">
       {error && !data && <div className="notice bad">{error}</div>}
       {data && !data.readable && <div className="notice bad">{data.problem}</div>}
-      {data && !data.can_connect && <div className="notice">Sample mode uses simulated data. Switch to Paper mode to connect Angel One for live market data with simulated orders.</div>}
+      {data && data.mode==="sample" && <div className="notice">Sample mode uses simulated data. Switch to Paper mode to connect Angel One for live market data with simulated orders.</div>}
+      {data && data.mode==="live" && <div className="notice warn">Live order placement is locked while the Angel One migration is being verified. Switch to Paper mode to test the account connection safely.</div>}
       {account ? <>
         <div className="acct"><div className="acct-main"><div className="acct-title"><b>{account.label}</b>
           {account.connected && <span className="chip up">Connected</span>}
