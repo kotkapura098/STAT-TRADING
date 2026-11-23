@@ -655,7 +655,7 @@ class AngelOneOrders:
                 _ANGEL_INDIVIDUAL_STATUS.acquire()
                 response = details(unique_id)
                 data = _ok(response, "individual order details")
-                row = data.get("data") if isinstance(data, dict) and isinstance(data.get("data"), dict) else data
+                row = data.get("data") if isinstance(data, dict) and "data" in data else data
                 if isinstance(row, list):
                     row = row[0] if row else None
                 if isinstance(row, dict):
