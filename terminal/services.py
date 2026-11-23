@@ -327,6 +327,7 @@ class Services:
             return
         from .brokers.angel_one import AngelOneFeed, AngelOneInstruments, AngelOneSession
         from .market.angel_catalog import AngelOneCatalog
+        from .market.angel_chain import AngelOneChainProvider
         from .trading.angel_one_gateway import AngelOneGateway
         with self._connect_lock:
             if self.accounts:
@@ -370,7 +371,7 @@ class Services:
                 self.active_account_id = aid
                 self.connected = True
                 self.algo.session = sess
-                self.chain.set_provider(None)
+                self.chain.set_provider(AngelOneChainProvider(sess, catalog, self.hub))
                 self.journal.ns = self.vault.journal_namespace(aid, self.mode)
                 self.store.set("accounts.last", aid)
                 self._start_journal_loop()
