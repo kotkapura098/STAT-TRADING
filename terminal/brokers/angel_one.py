@@ -79,16 +79,38 @@ class AngelOneSession:
         except ImportError as exc:
             raise RuntimeError("Angel One SDK is missing. Install smartapi-python.") from exc
         client = SmartConnect(api_key=self.api_key)
-        response = client.generateSession(self.client_code, self.pin, code)
-        data = _ok(response, "login")
-        self.jwt_token = str(data.get("jwtToken") or "")
-        self.refresh_token = str(data.get("refreshToken") or "")
-        self.feed_token = str(client.getfeedToken() or data.get("feedToken") or "")
+        try:
+            response = client.generateSession(self.client_code, self.pin, code)
+            data = _ok(response, "login")
+            self.jwt_token = str(data.get("jwtToken") or "")
+            self.refresh_token = str(data.get("refreshToken") or "")
+            self.feed_token = str(client.getfeedToken() or data.get("feedToken") or "")
+            if not self.jwt_token or not self.refresh_token or not self.feed_token:
+                raise RuntimeError("Angel One login returned an incomplete session.")
+            self.client = client
+            self.profile = _ok(client.getProfile(self.refresh_token), "profile")
+        except Exception:
+            self.client = None
+            self.jwt_token = self.refresh_token = self.feed_token = ""
+            self.profile = {}
+            try:
+                client.terminateSession(self.client_code)
+            except Exception:
+                pass
+            raise
+
+    def refresh(self) -> None:
+        """Refresh the REST JWT using the SDK refresh token and rotate the feed token."""
+        client = self.require_client()
+        if not self.refresh_token:
+            raise RuntimeError("Angel One refresh token is unavailable; reconnect the account.")
+        response = client.generateToken(self.refresh_token)
+        data = _ok(response, "token refresh")
+        self.jwt_token = str(data.get("jwtToken") or self.jwt_token)
+        self.refresh_token = str(data.get("refreshToken") or self.refresh_token)
+        self.feed_token = str(client.getfeedToken() or data.get("feedToken") or self.feed_token)
         if not self.jwt_token or not self.feed_token:
-            raise RuntimeError("Angel One login returned an incomplete session.")
-        self.client = client
-        profile = client.getProfile(self.refresh_token)
-        self.profile = _ok(profile, "profile")
+            raise RuntimeError("Angel One token refresh returned an incomplete session.")
 
     def require_client(self):
         if self.client is None:
