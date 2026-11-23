@@ -71,7 +71,7 @@ class AngelOneCatalog(Catalog):
         self.ins.load()
         names={}
         for row in self.ins._rows:
-            if str(row.get("exch_seg") or "").upper() not in ("NFO", "NSE_FO"):
+            if str(row.get("exch_seg") or "").upper() not in ("NFO", "NSE_FO", "BFO", "BSE_FO"):
                 continue
             if str(row.get("opttype") or "").upper() in ("CE","PE"):
                 name=str(row.get("name") or "").upper()
