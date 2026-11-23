@@ -78,6 +78,10 @@ class AngelOneSession:
     def logged_in(self) -> bool:
         return self.client is not None and bool(self.jwt_token and self.feed_token)
 
+    def _mark_session_expired(self) -> None:
+        self.jwt_token = self.refresh_token = self.feed_token = ""
+        self.profile = {}
+
     def login(self, totp: str | None = None) -> None:
         if not all((self.api_key, self.client_code, self.pin)):
             raise RuntimeError("Configure the Angel One API Key, Client Code and PIN in Settings or the server environment.")
@@ -107,6 +111,9 @@ class AngelOneSession:
             if not self.jwt_token or not self.refresh_token or not self.feed_token:
                 raise RuntimeError("Angel One login returned an incomplete session.")
             self.client = client
+            set_expiry_hook = getattr(client, "setSessionExpiryHook", None)
+            if callable(set_expiry_hook):
+                set_expiry_hook(self._mark_session_expired)
             self.profile = _ok(client.getProfile(self.refresh_token), "profile")
         except Exception:
             self.client = None
