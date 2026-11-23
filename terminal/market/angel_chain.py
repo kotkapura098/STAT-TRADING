@@ -6,10 +6,12 @@ include current open interest. No synthetic OI or previous-day OI is invented.
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
-from datetime import date
+from datetime import date, datetime, timedelta
+from pathlib import Path
 
 from .chain import ChainUnavailable, INDEX_UNDERLYINGS, Leg, RawChain, _f
 from . import commodity as cm
@@ -24,11 +26,141 @@ class AngelOneChainProvider:
     MAX_OPTIONS = 200
     BATCH_SIZE = 50
     REQUEST_INTERVAL = 1.05
+    HISTORY_INTERVAL = 0.55
+    BASELINE_LOOKBACK_DAYS = 10
+    BASELINE_RETRY_SECONDS = 300
 
-    def __init__(self, session, instruments, catalog, hub):
+    def __init__(self, session, instruments, catalog, hub, cache_path=None):
         self.session, self.ins, self.cat, self.hub = session, instruments, catalog, hub
         self._request_lock = threading.Lock()
         self._last_request = 0.0
+        self._oi_lock = threading.RLock()
+        self._oi_queue = []
+        self._oi_queued = set()
+        self._oi_attempted = {}
+        self._oi_cache = {}
+        self._oi_thread = None
+        self._oi_last_request = 0.0
+        self._cache_path = Path(cache_path) if cache_path else None
+        self._load_oi_cache()
+
+    def _load_oi_cache(self):
+        if not self._cache_path or not self._cache_path.exists():
+            return
+        try:
+            payload = json.loads(self._cache_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                self._oi_cache = {k: v for k, v in payload.items()
+                                  if isinstance(v, dict) and v.get("oi") is not None}
+        except Exception:
+            log.warning("Could not read cached Angel One OI baselines; rebuilding them.")
+
+    def _save_oi_cache(self):
+        if not self._cache_path:
+            return
+        try:
+            self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._cache_path.with_suffix(self._cache_path.suffix + ".tmp")
+            tmp.write_text(json.dumps(self._oi_cache, separators=(",", ":")), encoding="utf-8")
+            tmp.replace(self._cache_path)
+        except Exception:
+            log.exception("Could not persist Angel One OI baselines")
+
+    @staticmethod
+    def _oi_cache_key(request_day, exchange, token):
+        return f"{request_day.isoformat()}|{exchange}|{token}"
+
+    @staticmethod
+    def _oi_point_time(value):
+        raw = str(value or "").strip()
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d-%b-%Y %H:%M:%S"):
+                try:
+                    return datetime.strptime(raw, fmt)
+                except ValueError:
+                    pass
+        return None
+
+    def _request_historical_oi(self, exchange, token, request_day):
+        """Return the final available OI observation from the last prior trading session."""
+        client = self.session.require_client()
+        start = request_day - timedelta(days=self.BASELINE_LOOKBACK_DAYS)
+        end = request_day - timedelta(days=1)
+        params = {
+            "exchange": exchange, "symboltoken": str(token), "interval": "ONE_MINUTE",
+            "fromdate": f"{start.isoformat()} 09:00", "todate": f"{end.isoformat()} 15:30",
+        }
+        with self._oi_lock:
+            wait = self.HISTORY_INTERVAL - (time.monotonic() - self._oi_last_request)
+            if wait > 0:
+                time.sleep(wait)
+            response = client.getOIData(params)
+            self._oi_last_request = time.monotonic()
+        if not isinstance(response, dict) or response.get("status") is not True:
+            message = response.get("message") if isinstance(response, dict) else "unreadable response"
+            raise ChainUnavailable(f"Angel One historical OI request failed: {message or 'unknown error'}")
+        latest = None
+        points = response.get("data") or []
+        for point in points if isinstance(points, list) else []:
+            if isinstance(point, dict):
+                stamp, value = point.get("time"), point.get("oi")
+            elif isinstance(point, (list, tuple)) and len(point) >= 2:
+                stamp, value = point[0], point[1]
+            else:
+                continue
+            when, oi = self._oi_point_time(stamp), _f(value)
+            if when is None or oi is None or when.date() >= request_day:
+                continue
+            if when.time() < datetime.strptime("09:00", "%H:%M").time() or when.time() > datetime.strptime("15:30", "%H:%M").time():
+                continue
+            if latest is None or when > latest[0]:
+                latest = (when, oi)
+        return (latest[0].date().isoformat(), latest[1]) if latest else None
+
+    def _oi_worker(self):
+        while True:
+            with self._oi_lock:
+                if not self._oi_queue:
+                    return
+                exchange, token, request_day = self._oi_queue.pop(0)
+                self._oi_queued.discard((request_day, exchange, token))
+            cache_key = self._oi_cache_key(request_day, exchange, token)
+            try:
+                baseline = self._request_historical_oi(exchange, token, request_day)
+                if baseline:
+                    with self._oi_lock:
+                        self._oi_cache[cache_key] = {"source_day": baseline[0], "oi": baseline[1]}
+                        self._save_oi_cache()
+            except Exception as exc:
+                log.warning("Historical OI baseline unavailable for %s/%s: %s", exchange, token, exc)
+
+    def _queue_oi_baselines(self, contracts):
+        request_day = now_ist().date()
+        with self._oi_lock:
+            for _, row in contracts:
+                exchange = str(row.get("exch_seg") or "").upper()
+                token = str(row.get("token") or "")
+                if exchange not in ("NFO", "BFO", "MCX") or not token.isdigit():
+                    continue
+                key = (request_day, exchange, token)
+                cache_key = self._oi_cache_key(*key)
+                if cache_key in self._oi_cache or key in self._oi_queued:
+                    continue
+                if time.time() - self._oi_attempted.get(key, 0) < self.BASELINE_RETRY_SECONDS:
+                    continue
+                self._oi_attempted[key] = time.time()
+                self._oi_queued.add(key)
+                self._oi_queue.append((exchange, token, request_day))
+            if self._oi_queue and (self._oi_thread is None or not self._oi_thread.is_alive()):
+                self._oi_thread = threading.Thread(target=self._oi_worker, name="angel-oi-baselines", daemon=True)
+                self._oi_thread.start()
+
+    def _previous_oi(self, exchange, token):
+        key = self._oi_cache_key(now_ist().date(), exchange, token)
+        item = self._oi_cache.get(key)
+        return _f(item.get("oi")) if item else None
 
     @staticmethod
     def _name(row):
@@ -158,6 +290,9 @@ class AngelOneChainProvider:
             centre = spot if spot is not None else strikes[len(strikes) // 2]
             chosen = set(sorted(strikes, key=lambda k: abs(k - centre))[:self.MAX_OPTIONS // 2])
             contracts = [(e, r) for e, r in contracts if _f(r.get("strike")) / 100 in chosen]
+        # Historical OI is token-specific; warm baselines in the background so
+        # the option-chain request does not block on hundreds of history calls.
+        self._queue_oi_baselines(contracts)
         quotes = self._full_quotes([r for _, r in contracts])
         lot = max(int(_f(contracts[0][1].get("lotsize"), 1)), 1)
         raw = RawChain(target, expiry, lot, spot_key, spot, None)
@@ -178,9 +313,10 @@ class AngelOneChainProvider:
             if oi is None:
                 oi = _f(quote.get("openInterest"))
             volume = _f(quote.get("tradeVolume"))
+            previous_oi = self._previous_oi(exchange, token)
             key = f"{segment}|{token}"
             raw.rows.setdefault(strike, {})[kind] = Leg(
-                key, str(row.get("symbol") or ""), ltp, prev_close, oi, None, volume)
+                key, str(row.get("symbol") or ""), ltp, prev_close, oi, previous_oi, volume)
         if not raw.rows:
             raise ChainUnavailable("Angel One returned no usable option contracts for this expiry.")
         return raw
