@@ -31,7 +31,7 @@ from .market.catalog import LazyCatalog
 from .market.charts import ChartService
 from .market.chain import ChainService, SampleChainProvider
 from .market.hub import HubEngineFeed, QuoteHub
-from .market.models import Instrument
+from .market.models import Instrument, Quote
 from .netip import NetIp
 from .nse import NseClient, NseService, SampleNse
 from .market.sample import SAMPLE_DERIVS, SAMPLE_EQUITIES, SampleFeed, build_catalog
@@ -351,7 +351,7 @@ class Services:
                     if seg in ("nse_cm", "bse_cm", "nse_fo", "bse_fo", "mcx_fo"):
                         catalog.register(Instrument(card["key"], seg, token, card["label"], card["label"], "INDEX", tick=0.05))
                 feed = AngelOneFeed(sess, self.cfg)
-                feed.start(self.hub.update)
+                feed.start(lambda tick: self.hub.update(Quote(tick.symbol, tick.price, ts=tick.ts.timestamp())))
                 self.feed = feed
                 self.hub.attach_feed(feed)
                 self.catalog.set(catalog)
