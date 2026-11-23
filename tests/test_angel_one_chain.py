@@ -85,6 +85,17 @@ def test_angel_one_chain_uses_full_quotes_and_real_open_interest():
     assert client.calls[0][1] == {"NFO": ["1001", "1002", "1003", "1004"]}
 
 
+def test_angel_one_chain_oi_flows_into_pcr_and_max_pain():
+    from terminal.market.chain import analyse
+    provider, _ = make_provider()
+    raw = provider.fetch("NIFTY", EXPIRY.isoformat())
+    result = analyse(raw, SimpleNamespace(ltp=lambda key: None, get=lambda key: None), None)
+    assert result["summary"]["ce_oi"] == 90000
+    assert result["summary"]["pe_oi"] == 90000
+    assert result["summary"]["pcr"] == 1.0
+    assert result["summary"]["max_pain"] in (26000.0, 26050.0)
+
+
 def test_angel_one_chain_does_not_fabricate_previous_oi():
     provider, _ = make_provider()
     raw = provider.fetch("NIFTY", EXPIRY.isoformat())
