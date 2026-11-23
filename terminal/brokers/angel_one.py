@@ -138,16 +138,18 @@ class AngelOneInstruments:
             self._rows, self._by_key, self._loaded_at = rows, indexed, time.time()
 
     def index_subscription(self, instrument: str) -> Subscription:
-        # Index token aliases are account/instrument-master dependent; require configured token.
         configured = getattr(self.cfg, "dashboard_indices", []) if self.cfg else []
+        aliases = {"NIFTY": "NIFTY 50", "BANKNIFTY": "NIFTY BANK", "FINNIFTY": "NIFTY FIN SERVICE",
+                   "MIDCPNIFTY": "NIFTY MID SELECT", "SENSEX": "SENSEX", "INDIA VIX": "INDIA VIX"}
+        wanted = aliases.get(instrument.upper(), instrument.upper())
         for item in configured:
-            if str(item.get("label", "")).upper() == instrument.upper():
-                seg = str(item["segment"]).lower()
-                token = str(item["token"])
-                if seg not in SEGMENT_TO_WS:
+            label = str(item.get("label", "")).upper()
+            if label == wanted or label == instrument.upper():
+                seg, token = str(item["segment"]).lower(), str(item["token"])
+                if seg not in SEGMENT_TO_WS or not token.isdigit():
                     break
                 return Subscription(seg, token, "INDEX")
-        raise RuntimeError(f"Configure the Angel One exchange token for index {instrument!r} in dashboard_indices.")
+        raise RuntimeError(f"No valid Angel One exchange token is configured for index {instrument!r}.")
 
     def get_row(self, key: str) -> dict | None:
         self.load()
@@ -217,7 +219,7 @@ class AngelOneInstruments:
 
 
 class AngelOneFeed:
-    """SmartWebSocketV2 feed adapter; LTP values arrive in paise and are normalized to rupees."""
+    """SmartWebSocketV2 feed with reconnect and automatic subscription restoration."""
 
     def __init__(self, session: AngelOneSession, cfg=None):
         self.session, self.cfg = session, cfg
@@ -226,20 +228,67 @@ class AngelOneFeed:
         self._subscriptions: dict[tuple[str, str], str] = {}
         self._lock = threading.RLock()
         self._thread = None
+        self._stop = threading.Event()
+        self._ready = threading.Event()
 
     def start(self, on_tick: Callable[[Tick], None]) -> None:
         self._on_tick = on_tick
-        self._connect()
-
-    def _connect(self):
-        from SmartApi.smartWebSocketV2 import SmartWebSocketV2
-        s = self.session
-        self._ws = SmartWebSocketV2(s.jwt_token, s.api_key, s.client_code, s.feed_token)
-        self._ws.on_data = self._on_data
-        self._ws.on_error = lambda ws, err: log.error("Angel One market stream error: %s", err)
-        self._ws.on_close = lambda ws: log.warning("Angel One market stream closed")
-        self._thread = threading.Thread(target=self._ws.connect, name="angel-one-feed", daemon=True)
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, name="angel-one-feed-supervisor", daemon=True)
         self._thread.start()
+
+    def _run(self):
+        delay = 1.0
+        while not self._stop.is_set():
+            try:
+                from SmartApi.smartWebSocketV2 import SmartWebSocketV2
+                s = self.session
+                ws = SmartWebSocketV2(s.jwt_token, s.api_key, s.client_code, s.feed_token)
+                with self._lock:
+                    self._ws = ws
+                    self._ready.clear()
+                ws.on_open = self._on_open
+                ws.on_data = self._on_data
+                ws.on_error = self._on_error
+                ws.on_close = self._on_close
+                ws.connect()
+            except Exception:
+                log.exception("Angel One WebSocket connection failed")
+            finally:
+                self._ready.clear()
+                with self._lock:
+                    self._ws = None
+            if not self._stop.is_set():
+                self._stop.wait(delay)
+                delay = min(delay * 2, 30.0)
+
+    def _on_open(self, ws=None):
+        self._ready.set()
+        with self._lock:
+            grouped: dict[int, list[str]] = {}
+            for (seg, token) in self._subscriptions:
+                ex = SEGMENT_TO_WS.get(seg)
+                if ex is not None:
+                    grouped.setdefault(ex, []).append(token)
+        self._send_subscriptions(grouped)
+
+    def _on_error(self, ws, error):
+        log.error("Angel One market stream error: %s", error)
+        self._ready.clear()
+
+    def _on_close(self, ws=None):
+        log.warning("Angel One market stream closed")
+        self._ready.clear()
+
+    def _send_subscriptions(self, grouped):
+        with self._lock:
+            ws = self._ws
+        if ws and self._ready.is_set() and grouped:
+            token_list = [{"exchangeType": ex, "tokens": sorted(set(tokens))} for ex, tokens in grouped.items()]
+            try:
+                ws.subscribe("golden-eagle", 1, token_list)
+            except Exception:
+                log.exception("Angel One subscription request failed")
 
     def subscribe(self, subs: list[Subscription]) -> None:
         grouped: dict[int, list[str]] = {}
@@ -250,9 +299,7 @@ class AngelOneFeed:
                     continue
                 grouped.setdefault(ex, []).append(str(sub.token))
                 self._subscriptions[(sub.segment, str(sub.token))] = sub.symbol
-        if self._ws and grouped:
-            token_list = [{"exchangeType": ex, "tokens": sorted(set(tokens))} for ex, tokens in grouped.items()]
-            self._ws.subscribe("golden-eagle", 1, token_list)
+        self._send_subscriptions(grouped)
 
     def subscribe_keys(self, keys: list[str]) -> None:
         subs = []
@@ -277,12 +324,18 @@ class AngelOneFeed:
             self._on_tick(Tick(symbol, price, now_ist()))
 
     def stop(self) -> None:
-        if self._ws:
+        self._stop.set()
+        self._ready.clear()
+        with self._lock:
+            ws, thread = self._ws, self._thread
+            self._ws = None
+        if ws:
             try:
-                self._ws.close_connection()
+                ws.close_connection()
             except Exception:
                 log.exception("Error closing Angel One feed")
-        self._ws = None
+        if thread and thread is not threading.current_thread():
+            thread.join(timeout=3)
 
 
 class AngelOneOrders:
