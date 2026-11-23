@@ -1,14 +1,12 @@
-/** Saved Kotak Neo accounts, as the server describes them. Secrets are never sent to the browser: only masked values and "saved" flags. */
+/** Single Angel One account metadata. Secret values are never returned to the browser. */
 export interface Account {
   id: string;
   label: string;
   source: "saved" | "env";
-  ucc: string;
-  mobile: string;
-  token: string;
-  has_mpin: boolean;
+  client_code: string;
+  api_key: string;
+  has_pin: boolean;
   has_totp_secret: boolean;
-  static_ip: string;
   default: boolean;
   connected: boolean;
   editable: boolean;
@@ -26,12 +24,11 @@ export interface AccountsResp {
 }
 export interface AccountForm {
   label: string;
-  consumer_key: string;
-  mobile: string;
-  ucc: string;
-  mpin: string;
+  api_key: string;
+  client_code: string;
+  pin: string;
   totp_secret: string;
-  clear_totp_secret: boolean;
-  static_ip: string;
 }
-export const emptyForm = (): AccountForm => ({ label: "", consumer_key: "", mobile: "", ucc: "", mpin: "", totp_secret: "", clear_totp_secret: false, static_ip: "" });
+export const emptyForm = (): AccountForm => ({
+  label: "My Angel One account", api_key: "", client_code: "", pin: "", totp_secret: "",
+});
