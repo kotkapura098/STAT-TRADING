@@ -295,6 +295,10 @@ class AngelOneFeed:
     def connected(self) -> bool:
         return self._connected.is_set()
 
+    def wait_connected(self, timeout: float = 15.0) -> bool:
+        """Wait for the first WebSocket open callback; reconnect supervision continues afterwards."""
+        return self._connected.wait(max(0.0, float(timeout)))
+
     def start(self, on_tick: Callable[[Tick], None]) -> None:
         if not self.session.jwt_token or not self.session.feed_token:
             raise RuntimeError("Log in to Angel One before starting the market feed.")
