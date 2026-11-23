@@ -3,7 +3,7 @@ from conftest import ROOT
 from fastapi.testclient import TestClient
 
 from terminal.config import load_config
-from terminal.netip import NetIp, NetIpError, parse_ips, parse_public, parse_public_ipv4_list
+from terminal.netip import NetIp, NetIpError, parse_ips, parse_public, parse_public_ipv4_list, same_ip
 from terminal.services import Services
 from terminal.store import Store
 from terminal.web.server import create_app
