@@ -158,3 +158,20 @@ def test_index_subscription_accepts_strategy_underlying_alias():
     ins._loaded_at = 9999999999
     sub = ins.index_subscription("NIFTY")
     assert (sub.segment, sub.token, sub.symbol) == ("nse_cm", "99926000", "INDEX")
+
+
+
+def test_feed_wait_connected_observes_open_callback():
+    from terminal.brokers.angel_one import AngelOneFeed
+    feed = AngelOneFeed(SimpleNamespace())
+    assert feed.wait_connected(timeout=0.001) is False
+    feed._on_open(None)
+    assert feed.wait_connected(timeout=0.001) is True
+    feed.stop()
+
+
+def test_feed_wait_connected_times_out_without_open_callback():
+    from terminal.brokers.angel_one import AngelOneFeed
+    feed = AngelOneFeed(SimpleNamespace())
+    assert feed.wait_connected(timeout=0.001) is False
+    feed.stop()
