@@ -27,7 +27,7 @@ def test_live_engine_uses_angel_one_orders_and_shared_quote_hub(monkeypatch):
     svc.mode = "live"
     svc.cfg = object()
     svc._angel_ins = object()
-    svc._default_session = object()
+    svc._default_session = SimpleNamespace(logged_in=True)
     svc.sessions = {"angel-one": svc._default_session}
     svc.active_account_id = "angel-one"
     svc.hub = object()
