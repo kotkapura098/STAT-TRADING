@@ -345,11 +345,19 @@ def create_app(svc: Services, password: str) -> FastAPI:
 
     # ------------------------------------------------------------------------ saved accounts
     def accounts_view() -> dict:
-        v = svc.vault
-        conn_ids = list(svc.accounts.keys())
+        # The migrated broker runtime deliberately supports exactly one Angel One account.
+        env = svc.env
+        configured = all(str(env.get(k, "") or "").strip() for k in
+                          ("ANGEL_API_KEY", "ANGEL_CLIENT_CODE", "ANGEL_PIN"))
+        code = str(env.get("ANGEL_CLIENT_CODE", "") or "").strip()
+        masked = (code[:1] + "•••" + code[-2:]) if len(code) > 3 else ("••••" if code else "")
+        account = {"id": "angel-one", "label": "Angel One (server credentials)", "ucc": masked,
+                   "connected": "angel-one" in svc.accounts, "source": "environment"} if configured else None
         return {"ok": True, "mode": svc.mode, "can_connect": svc.mode != "sample", "connected": svc.connected,
-                "active": svc.account["id"] if svc.account else None, "default": v.default_id(), "readable": v.readable, "problem": v.problem,
-                "accounts": v.public(connected_ids=conn_ids)}
+                "active": svc.account["id"] if svc.account else None, "default": "angel-one" if configured else "",
+                "readable": True, "problem": "" if configured else
+                "Set ANGEL_API_KEY, ANGEL_CLIENT_CODE and ANGEL_PIN in the server environment.",
+                "accounts": [account] if account else []}
 
     @app.get("/api/accounts", dependencies=[Depends(auth)])
     def accounts_list():
@@ -357,37 +365,27 @@ def create_app(svc: Services, password: str) -> FastAPI:
 
     @app.post("/api/accounts", dependencies=[Depends(guard)])
     def accounts_add(body: AccountIn):
-        def go():
-            aid = svc.vault.add(body.model_dump())
-            return {**accounts_view(), "id": aid}
-        return guarded(go)
+        return fail("Angel One credentials are configured once in the server environment; multiple accounts are disabled.")
 
     @app.put("/api/accounts/{aid}", dependencies=[Depends(guard)])
     def accounts_update(aid: str, body: AccountIn):
-        def go():
-            if aid in svc.accounts or (svc.account and svc.account["id"] == aid):
-                raise RuntimeError("This account is connected. Disconnect it before editing it.")
-            svc.vault.update(aid, body.model_dump())
-            return accounts_view()
-        return guarded(go)
+        return fail("Edit ANGEL_API_KEY, ANGEL_CLIENT_CODE and ANGEL_PIN in the server environment, then restart.")
 
     @app.delete("/api/accounts/{aid}", dependencies=[Depends(guard)])
     def accounts_delete(aid: str):
-        def go():
-            if aid in svc.accounts or (svc.account and svc.account["id"] == aid):
-                raise RuntimeError("This account is connected. Disconnect it before deleting it.")
-            svc.vault.delete(aid)
-            return accounts_view()
-        return guarded(go)
+        return fail("Angel One credentials are managed in the server environment.")
 
     @app.post("/api/accounts/{aid}/default", dependencies=[Depends(guard)])
     def accounts_default(aid: str):
-        return guarded(lambda: (svc.vault.set_default(aid), accounts_view())[1])
+        if aid != "angel-one":
+            return fail("Only the single Angel One account is supported.")
+        return {"ok": True, **accounts_view()}
 
     @app.post("/api/accounts/{aid}/activate", dependencies=[Depends(guard)])
     def accounts_activate(aid: str):
-        if aid in svc.accounts:
-            svc.active_account_id = aid
+        if aid != "angel-one" or aid not in svc.accounts:
+            return fail("Connect the configured Angel One account first.")
+        svc.active_account_id = aid
         return {"ok": True, "active": svc.active_account_id}
 
     # --------------------------------------------------------------------------- static IP
