@@ -1,5 +1,5 @@
 """
-Kotak's SDK never raises: a timeout comes back as {"Error": ...} and a lost reply looks exactly like a
+Angel One SmartAPI can return error objects or raise on network failures: a timeout comes back as {"Error": ...} and a lost reply looks exactly like a
 rejected order. These tests make the paper broker lose replies / hide statuses / hide positions and check
 that the engine falls back to the broker's POSITIONS instead of guessing - no naked shorts, no double buys.
 """

@@ -5,7 +5,7 @@ Security model (single owner per instance, bound to localhost by default):
   * one password -> random session cookie (HttpOnly, SameSite=Strict); sessions are in memory only
   * every state-changing request must carry the custom header `X-Terminal: 1` (a cross-site page cannot send it)
   * the WebSocket checks the cookie AND that the Origin matches the Host (blocks cross-site WebSocket hijacking)
-  * login attempts are rate limited; nothing secret (Kotak keys, MPIN, TOTP secret) is ever sent to the browser
+  * login attempts are rate limited; Angel One credentials remain server-side and are never sent to the browser
 """
 from __future__ import annotations
 
@@ -53,14 +53,11 @@ class ConnectIn(BaseModel):
 
 
 class AccountIn(BaseModel):
-    label: str = Field("", max_length=40)
-    consumer_key: str = Field("", max_length=300)
-    mobile: str = Field("", max_length=24)
-    ucc: str = Field("", max_length=30)
-    mpin: str = Field("", max_length=12)
+    label: str = Field("My Angel One account", max_length=40)
+    api_key: str = Field("", max_length=300)
+    client_code: str = Field("", max_length=30)
+    pin: str = Field("", max_length=8)
     totp_secret: str = Field("", max_length=80)
-    clear_totp_secret: bool = False
-    static_ip: str = Field("", max_length=64)
 
 
 class NetworkIn(BaseModel):
@@ -304,7 +301,7 @@ def create_app(svc: Services, password: str) -> FastAPI:
             feed = svc.feed
             lim = svc.trading.limits
             return {
-                "mode": svc.mode, "needs_connect": svc.needs_connect, "connected": svc.connected,
+                "mode": svc.mode, "needs_connect": svc.needs_connect, "connected": bool(svc.connected and (svc.mode == "sample" or (svc.session and getattr(svc.session, "logged_in", False)))),
                 "my_ip": getattr(svc.session, "my_ip", None), "ip_alert": ip_alert(), "activity": activity(), "market": market_status(), "market_mcx": mcx_status(close_override=svc.cfg.mcx_close_time), "commodities": svc.commodity_cards(),
                 "feed": {"connected": bool(getattr(feed, "connected", False)), "age_s": None if age is None else round(age, 1),
                          "ticks": hub.tick_count, "subscribed": len(hub.wanted())},
@@ -343,13 +340,17 @@ def create_app(svc: Services, password: str) -> FastAPI:
             return {"ok": True}
         return guarded(go)
 
-    # ------------------------------------------------------------------------ saved accounts
+    # ------------------------------------------------------------------------ saved Angel One account
     def accounts_view() -> dict:
-        v = svc.vault
-        conn_ids = list(svc.accounts.keys())
-        return {"ok": True, "mode": svc.mode, "can_connect": svc.mode != "sample", "connected": svc.connected,
-                "active": svc.account["id"] if svc.account else None, "default": v.default_id(), "readable": v.readable, "problem": v.problem,
-                "accounts": v.public(connected_ids=conn_ids)}
+        vault = svc.vault
+        connected_ids = list(svc.accounts.keys())
+        return {
+            "ok": True, "mode": svc.mode, "can_connect": svc.mode != "sample",
+            "connected": svc.connected,
+            "active": svc.account["id"] if svc.account else None,
+            "default": vault.default_id(), "readable": vault.readable, "problem": vault.problem,
+            "accounts": vault.public(connected_ids=connected_ids),
+        }
 
     @app.get("/api/accounts", dependencies=[Depends(auth)])
     def accounts_list():
@@ -365,8 +366,8 @@ def create_app(svc: Services, password: str) -> FastAPI:
     @app.put("/api/accounts/{aid}", dependencies=[Depends(guard)])
     def accounts_update(aid: str, body: AccountIn):
         def go():
-            if aid in svc.accounts or (svc.account and svc.account["id"] == aid):
-                raise RuntimeError("This account is connected. Disconnect it before editing it.")
+            if aid in svc.accounts:
+                raise RuntimeError("Disconnect the Angel One account before editing its credentials.")
             svc.vault.update(aid, body.model_dump())
             return accounts_view()
         return guarded(go)
@@ -374,8 +375,8 @@ def create_app(svc: Services, password: str) -> FastAPI:
     @app.delete("/api/accounts/{aid}", dependencies=[Depends(guard)])
     def accounts_delete(aid: str):
         def go():
-            if aid in svc.accounts or (svc.account and svc.account["id"] == aid):
-                raise RuntimeError("This account is connected. Disconnect it before deleting it.")
+            if aid in svc.accounts:
+                raise RuntimeError("Disconnect the Angel One account before deleting its credentials.")
             svc.vault.delete(aid)
             return accounts_view()
         return guarded(go)
@@ -386,8 +387,9 @@ def create_app(svc: Services, password: str) -> FastAPI:
 
     @app.post("/api/accounts/{aid}/activate", dependencies=[Depends(guard)])
     def accounts_activate(aid: str):
-        if aid in svc.accounts:
-            svc.active_account_id = aid
+        if aid not in svc.accounts:
+            return fail("Connect the configured Angel One account first.")
+        svc.active_account_id = aid
         return {"ok": True, "active": svc.active_account_id}
 
     # --------------------------------------------------------------------------- static IP
@@ -536,6 +538,16 @@ def create_app(svc: Services, password: str) -> FastAPI:
     @app.get("/api/positions", dependencies=[Depends(auth)])
     def positions(account_id: str = ""):
         return safe(lambda: svc.trading.positions_view(account_id.strip() or None))
+
+    @app.get("/api/holdings", dependencies=[Depends(auth)])
+    def holdings(account_id: str = ""):
+        def go():
+            gw = svc.get_gateway(account_id.strip() or None)
+            if gw is None:
+                return {"ok": False, "holdings": None, "reason": "not_connected"}
+            rows = gw.holdings() if hasattr(gw, "holdings") else None
+            return {"ok": rows is not None, "holdings": rows}
+        return safe(go)
 
     @app.get("/api/funds", dependencies=[Depends(auth)])
     def funds(account_id: str = ""):
@@ -737,6 +749,11 @@ def create_app(svc: Services, password: str) -> FastAPI:
         def go():
             sid = body.strategy_id if body and body.strategy_id else None
             confirm_live = body.confirm_live if body else False
+            # Sample mode is the built-in replay demo, not a live rule-strategy session.
+            # Keep the Algo page's demo button wired to the replay Engine.
+            if svc.mode == "sample" and sid is None:
+                svc.algo.start()
+                return {"ok": True}
             if sid is not None:
                 if svc.mode == "live" and not confirm_live:
                     raise RuntimeError("Live mode: confirm that this strategy may place REAL orders")

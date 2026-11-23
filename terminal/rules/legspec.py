@@ -360,7 +360,7 @@ def _cross_checks(s: LegStrategy, p: _P, warnings: list[str]) -> None:
             p.err("Exit time", f"must be {c_hm} or earlier: the commodity market closes then (today's MCX close; it changes with US daylight saving time)")
         elif x > c_min - commodity.BROKER_SQUAREOFF_MIN:
             warnings.append(f"The exit time {s.exit.time} is within {commodity.BROKER_SQUAREOFF_MIN} minutes of the {c_hm} close. Brokers usually square off "
-                            f"intraday positions about {commodity.BROKER_SQUAREOFF_MIN} minutes before the close (Kotak's own time may differ), so the broker may close them first. "
+                            f"intraday positions about {commodity.BROKER_SQUAREOFF_MIN} minutes before the close (Angel One's own time may differ), so the broker may close them first. "
                             f"Choosing the exit time is up to you; an earlier one is safer.")
     elif x > LATEST_EXIT:
         p.err("Exit time", "must be 15:15 or earlier so intraday positions are closed before the exchange's auto square-off")
@@ -399,7 +399,7 @@ def _cross_checks(s: LegStrategy, p: _P, warnings: list[str]) -> None:
     if any(lg.segment == "futures" for lg in s.legs):
         warnings.append("Futures legs need much more margin than options and are not recorded for back-testing yet.")
     if any(lg.segment == "options" and lg.strike.by.startswith("delta") for lg in s.legs):
-        warnings.append("Delta is estimated by the terminal from the option price (Black-Scholes), not sent by Kotak. "
+        warnings.append("Delta is estimated by the terminal from the option price (Black-Scholes), not sent by Angel One. "
                         "It can differ from the number on other platforms.")
     buys = [lg for lg in s.legs if lg.side == "B" and lg.trigger.type == "time"]
     if buys and sells:

@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: punjab-ai-terminal
+    name: golden-eagle-trades
     env: docker
     plan: starter          # Starter ($7/mo) ensures 24/7 uptime without sleep (Free tier sleeps after 15m)
     region: singapore      # Lowest latency to Indian exchanges (NSE/BSE/MCX)
@@ -10,25 +10,27 @@ services:
     envVars:
       - key: DASHBOARD_PASSWORD
         sync: false        # Prompts for secure password during Render deployment
-      - key: ALLOW_LIVE
-        value: "yes"
       - key: ALLOW_REMOTE
         value: "yes"
       - key: HOST
         value: "0.0.0.0"
       - key: PORT
         value: "10000"
-      - key: NEO_ENVIRONMENT
-        value: "prod"
-      - key: NEO_CONSUMER_KEY
+      - key: ALLOW_LIVE
+        value: "no"       # Live orders remain locked until Angel One paper-mode verification is complete.
+      - key: ANGEL_API_KEY
         sync: false
-      - key: NEO_CONSUMER_SECRET
+      - key: ANGEL_CLIENT_CODE
         sync: false
-      - key: NEO_MOBILE_NUMBER
+      - key: ANGEL_PIN
         sync: false
-      - key: NEO_PASSWORD
+      - key: ANGEL_TOTP_SECRET
         sync: false
-      - key: NEO_MPIN
+      - key: ANGEL_STATIC_IP
+        sync: false
+      - key: HTTPS_PROXY
+        sync: false
+      - key: HTTP_PROXY
         sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false

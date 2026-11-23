@@ -5,30 +5,42 @@ from terminal.config import load_config
 from terminal.controller import Controller
 
 
-class Sess:
+class Session:
     logged_in = True
-    my_ip = "203.0.113.7"
 
 
-def test_start_refused_when_kotak_sees_a_different_ip_than_config():
+def test_controller_requires_authenticated_angel_one_session():
     cfg = load_config(ROOT / "config.yaml")
-    cfg.static_ip = "198.51.100.9"
-    c = Controller(cfg, lambda: pytest.fail("engine must not be built"), Sess())
-    with pytest.raises(RuntimeError, match="203.0.113.7.*198.51.100.9"):
-        c.start()
-    assert c.snapshot()["my_ip"] == "203.0.113.7"
+    session = Session()
+    session.logged_in = False
+    controller = Controller(cfg, lambda: pytest.fail("engine must not be built"), session)
+    with pytest.raises(RuntimeError, match="Connect your Angel One account"):
+        controller.start()
 
 
-def test_matching_or_unset_static_ip_is_allowed():
+def test_controller_starts_after_angel_one_authentication_even_with_legacy_static_ip_set():
+    cfg = load_config(ROOT / "config.yaml")
+    cfg.static_ip = "198.51.100.9"  # retained only for old config compatibility
+    built = []
+
+    class Engine:
+        finished = type("Event", (), {"is_set": staticmethod(lambda: False)})()
+        def start(self):
+            built.append(True)
+
+    controller = Controller(cfg, Engine, Session())
+    controller.start()
+    assert built == [True]
+
+
+def test_sample_controller_can_run_without_a_broker_session():
     cfg = load_config(ROOT / "config.yaml")
     built = []
 
-    class Eng:
-        finished = type("E", (), {"is_set": staticmethod(lambda: False)})()
-        def start(self): built.append(1)
+    class Engine:
+        finished = type("Event", (), {"is_set": staticmethod(lambda: False)})()
+        def start(self):
+            built.append(True)
 
-    for want in ("", "203.0.113.7"):
-        cfg.static_ip = want
-        c = Controller(cfg, Eng, Sess())
-        c.start()
-    assert built == [1, 1]
+    Controller(cfg, Engine).start()
+    assert built == [True]

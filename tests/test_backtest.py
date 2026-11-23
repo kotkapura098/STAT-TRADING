@@ -282,7 +282,8 @@ def test_backtest_screens_end_to_end_and_never_touch_live_state(env):
     assert c.post("/api/backtest/sample-days", json={"days": 6}).json()["days"] == 6
     d = c.get("/api/backtest/days").json()
     days = [x["day"] for x in d["days"]]
-    assert len(days) == 6 and d["days"][0]["unds"][0]["usable"] and d["strategies"][0]["id"] == sid
+    strategy_row = next(x for x in d["strategies"] if x["id"] == sid)
+    assert len(days) == 6 and d["days"][0]["unds"][0]["usable"] and strategy_row["valid"]
     assert c.post("/api/backtest/run", json={"strategy_id": sid, "days": ["nope"]}).status_code == 422
     assert c.post("/api/backtest/run", json={"strategy_id": 999, "days": days}).status_code == 404
     assert c.post("/api/backtest/run", json={"strategy_id": sid, "days": days, "start_time": "09:10", "cost": 40}).json()["ok"]

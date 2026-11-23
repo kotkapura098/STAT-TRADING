@@ -11,6 +11,12 @@ class Tick:
     symbol: str          # INDEX or an option trading symbol
     price: float
     ts: datetime         # tz-aware IST
+    prev_close: float | None = None
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    volume: int | None = None
+    oi: int | None = None
 
 
 @dataclass(frozen=True)
@@ -33,6 +39,8 @@ class OrderRequest:
     price: float = 0.0
     trigger: float = 0.0
     tag: str = ""
+    product_type: str = "INTRADAY"  # Angel One product mapping; ignored by other broker adapters
+    validity: str = "DAY"
 
 
 @dataclass

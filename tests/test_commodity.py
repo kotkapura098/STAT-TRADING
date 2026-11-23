@@ -9,8 +9,8 @@ from conftest import ROOT
 from terminal.clock import IST
 from terminal.config import load_config
 from terminal.market import commodity as cm
-from terminal.market.catalog import KotakCatalog, LazyCatalog
-from terminal.market.chain import ChainService, ChainUnavailable, KotakChainProvider, SampleChainProvider
+from terminal.market.catalog import LazyCatalog
+from terminal.market.chain import ChainService, ChainUnavailable, SampleChainProvider
 from terminal.market.hub import QuoteHub
 from terminal.market.models import Instrument, Quote
 from terminal.market.sample import SAMPLE_DERIVS, SAMPLE_INDICES, build_catalog
@@ -20,7 +20,6 @@ from terminal.services import Services
 from terminal.trading.models import OrderTicket
 from terminal.web.server import create_app
 
-from test_chain import DOC_REPLY, FakeClient, FakeSession
 from test_legs import LegWorld, leg, sl, spec
 
 
@@ -108,7 +107,7 @@ def test_dashboard_commodity_cards_are_the_front_month_futures():
         svc.shutdown()
 
 
-# ------------------------------------------------------------------------ Kotak scrip master
+# ------------------------------------------------------------------------ broker instrument master
 def _mcx_frame():
     import pandas as pd
     return pd.DataFrame({
@@ -118,41 +117,6 @@ def _mcx_frame():
         "llotsize": [100, 100, 100, 1000, 1, 5], "dticksize": [100, 100, 100, 100, 100, 100]})
 
 
-def test_kotak_mcx_rows_become_futures_and_options_with_names_lots_and_ticks():
-    class Ins:
-        def _load(self, seg):
-            return _mcx_frame() if seg == "mcx_fo" else _mcx_frame().iloc[0:0]
-    cat = KotakCatalog(Ins())
-    fut = cat.search("gold mini", 10)
-    assert [i.kind for i in fut] == ["FUT"] and fut[0].lot == 100 and fut[0].tick == 1.0 and fut[0].label().startswith("Gold Mini")
-    assert {i.name for i in cat.search("gold", 10)} == {"GOLD", "GOLDM"}
-    opts = cat.search("goldm ce 120000", 10)
-    assert [(i.kind, i.strike) for i in opts] == [("CE", 120000.0)]
-    assert cat.search("xyz", 10)[0].name == "XYZ"                          # a symbol the table does not know is still searchable
-    assert cat.mcx_names() == {"GOLDM": {"lot": 100, "name": "GOLDM", "label": "Gold Mini", "group": "Gold", "size": "mini"}}
-    assert [u["name"] for u in cat.mcx_underlyings("gold")] == ["GOLDM"]   # only names that have options can open a chain
-    assert cat.mcx_future("GOLD").name == "GOLD" and cat.mcx_future("NOPE") is None
-
-
-def test_kotak_commodity_chain_calls_mcx_fo_and_uses_the_future_as_spot():
-    class Ins:
-        def _load(self, seg):
-            return _mcx_frame()
-    cat = KotakCatalog(Ins())
-    c = FakeClient(DOC_REPLY)
-    p = KotakChainProvider(FakeSession(c), cat)
-    p.check("GOLDM")
-    with pytest.raises(ChainUnavailable, match="not in Kotak's F&O list|F&O"):
-        p.check("NOPE")
-    assert p._exchange("GOLDM") == "mcx_fo" and p._exchange("NIFTY") == "nse_fo"
-    assert p._iso("2026-12-04", "mcx_fo") == "2026-12-04"
-    assert p._iso("1796000000", "mcx_fo")                                    # Unix-seconds expiries are understood
-    raw = p.fetch("GOLDM", "2026-12-04")
-    assert c.calls[0][1]["exchange"] == "mcx_fo" and c.calls[0][1]["underlying"] == "GOLDM"
-    assert raw.spot_key and raw.spot_key.startswith("mcx_fo|")
-
-
-# ----------------------------------------------------------------------------------- order rules
 @pytest.fixture
 def world(tmp_path):
     return LegWorld(tmp_path)

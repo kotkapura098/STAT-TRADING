@@ -801,7 +801,7 @@ class Runner:
                 except (OrderError, OrderUnknown):
                     pass
             return self.halt(f"{p.symbol} is still open ({held - floor} units) after {self.env.exit_attempts} attempts to close it. "
-                             f"Close it by hand in the Kotak app{' (its exchange stop-loss was put back)' if p.status == 'open' else ''}.")
+                             f"Close it by hand in the Angel One app{' (its exchange stop-loss was put back)' if p.status == 'open' else ''}.")
         price, est = self._avg_fill(oids, sl_row)
         self._finish(p, price if price is not None else (self.m.ltp(p.key) or p.entry_price), reason, estimated=price is None)
 
