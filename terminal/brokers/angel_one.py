@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import threading
+from collections import deque
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -493,6 +494,35 @@ class AngelOneFeed:
         if thread and thread is not threading.current_thread():
             thread.join(timeout=5)
         self._thread = None
+
+class SlidingWindowRateLimiter:
+    """Thread-safe rolling-window limiter shared by all adapters for one API key."""
+
+    def __init__(self, limit: int, window_seconds: float = 1.0):
+        self.limit = int(limit)
+        self.window_seconds = float(window_seconds)
+        self._lock = threading.Lock()
+        self._calls = deque()
+
+    def acquire(self) -> None:
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                while self._calls and now - self._calls[0] >= self.window_seconds:
+                    self._calls.popleft()
+                if len(self._calls) < self.limit:
+                    self._calls.append(now)
+                    return
+                wait = max(0.001, self.window_seconds - (now - self._calls[0]))
+            time.sleep(wait)
+
+
+# SmartAPI limits are per API key; share these across the gateway and strategy engine.
+_ANGEL_ORDER_MUTATIONS = SlidingWindowRateLimiter(9, 1.0)
+_ANGEL_ORDER_BOOK = SlidingWindowRateLimiter(1, 1.0)
+_ANGEL_TRADE_BOOK = SlidingWindowRateLimiter(1, 1.0)
+_ANGEL_INDIVIDUAL_STATUS = SlidingWindowRateLimiter(10, 1.0)
+
 
 class AngelOneOrders:
     """SmartAPI order and account operations. Quantities are units, not lots."""
