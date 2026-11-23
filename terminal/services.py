@@ -3,7 +3,7 @@ Services: builds and owns everything one terminal instance needs - hub, catalog,
 trading service and the algo controller - according to the mode (sample / paper / live).
 
   sample  no login. Invented prices, simulated orders. For trying the UI.
-  paper   Kotak login. REAL prices, simulated orders.
+  paper   Angel One login. REAL prices, simulated orders.
   live    Kotak login. REAL prices, REAL orders.
 """
 from __future__ import annotations
@@ -76,7 +76,7 @@ class Services:
         self.chain = ChainService(self.hub, self.store)
         self.charts = ChartService(self.hub, self.store, sample=self.mode == "sample")
         self.netip = NetIp(self.store)
-        self.session = None                    # KotakSession (paper / live)
+        self.session = None                    # AngelOneSession (paper / live)
         self.vault = AngelOneAccountVault(Path(cfg.data_dir) / "angel-account.enc", env)
         self.accounts: dict[str, dict] = {}    # all connected accounts: aid -> {id, label, ucc}
         self.sessions: dict[str, Any] = {}     # one Angel One session
@@ -172,8 +172,8 @@ class Services:
             return next(iter(self.sessions.values()))
         return getattr(self, "_default_session", None)
 
-    def get_valid_kotak_session(self):
-        """Return the active or first connected Kotak session that is currently logged in."""
+    def get_valid_angel_one_session(self):
+        """Return the active Angel One session that is currently logged in."""
         sess = self.get_session()
         if sess and getattr(sess, "logged_in", False) and getattr(sess, "client", None) is not None:
             return sess
@@ -445,7 +445,7 @@ class Services:
         self.journal.mode = mode
         self._start_ip_monitor()
         log.warning("left the sample world: now in %s mode, waiting for the Angel One login", mode)
-        self.alerts.notify("info", f"Trading mode is now {'REAL: orders go to your Angel One account' if mode == 'live' else 'PAPER: simulated orders'} (waiting for the Kotak login).")
+        self.alerts.notify("info", f"Trading mode is now {'REAL: orders go to your Angel One account' if mode == 'live' else 'PAPER: simulated orders'} (waiting for the Angel One login).")
 
     def _open_exposure(self) -> bool:
         """True when the broker side has open positions or live orders (used before leaving real trading)."""
@@ -494,7 +494,7 @@ class Services:
                 self.gateway = gateway
                 self.journal.ns = self.vault.journal_namespace(self.account["id"], mode)
             log.warning("trading mode switched %s -> %s", old, mode)
-            self.alerts.notify("info", f"Trading mode is now {'REAL: orders go to your Kotak account' if mode == 'live' else 'PAPER: simulated orders'}.")
+            self.alerts.notify("info", f"Trading mode is now {'REAL: orders go to your Angel One account' if mode == 'live' else 'PAPER: simulated orders'}.")
             return self.mode_info()
 
     def disconnect(self, account_id: str | None = None) -> None:
