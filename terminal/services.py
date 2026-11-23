@@ -16,7 +16,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .accounts import AccountVault, scrub
+from .accounts import AccountVault
 from .alerts import Alerts
 from .backtest import BacktestManager
 from .history import CandleDB, Recorder
@@ -295,13 +295,18 @@ class Services:
             return "", ""
 
     def _ip_problem(self, seen) -> str | None:
-        ip, label = self._account_ip()
-        return self.netip.problem_for(seen, ip, self.cfg.static_ip, label)
+        # Angel One SmartAPI does not use Kotak's registered-static-IP handshake.
+        return None
 
     def network_status(self) -> dict:
-        ip, label = self._account_ip()
-        seen = getattr(self.session, "my_ip", None) if self.connected and self.session is not None else None
-        return self.netip.status(self.mode, seen, ip, self.cfg.static_ip, label)
+        return {
+            "ok": True, "app_mode": self.mode, "mode": "not_applicable",
+            "detected": {"at": None, "v4": "", "v6": "", "errors": {"v4": "", "v6": ""}},
+            "own": {"v4": "", "v6": ""}, "registered": None, "expected": [], "source": "",
+            "account_label": "", "kotak_sees": None, "verdict": "not_required",
+            "message": "Angel One SmartAPI does not require the Kotak registered-IP check.",
+            "bad": False,
+        }
 
     def _start_ip_monitor(self) -> None:
         """Every few minutes: look up this computer's public IP, and tell the user (Telegram) when a live setup stops matching."""
