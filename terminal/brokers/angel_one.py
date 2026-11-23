@@ -141,7 +141,7 @@ class AngelOneInstruments:
 
     def load(self, force: bool = False) -> None:
         with self._lock:
-            if self._rows and not force and time.time() - self._loaded_at < self.cache_seconds:
+            if self._loaded_at and not force and time.time() - self._loaded_at < self.cache_seconds:
                 return
             response = requests.get(MASTER_URL, timeout=30)
             response.raise_for_status()
