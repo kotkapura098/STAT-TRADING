@@ -3,8 +3,8 @@ Services: builds and owns everything one terminal instance needs - hub, catalog,
 trading service and the algo controller - according to the mode (sample / paper / live).
 
   sample  no login. Invented prices, simulated orders. For trying the UI.
-  paper   Kotak login. REAL prices, simulated orders.
-  live    Kotak login. REAL prices, REAL orders.
+  paper   Angel One login. REAL prices, simulated orders.
+  live    Angel One login. REAL prices, REAL orders.
 """
 from __future__ import annotations
 
@@ -76,11 +76,11 @@ class Services:
         self.chain = ChainService(self.hub, self.store)
         self.charts = ChartService(self.hub, self.store, sample=self.mode == "sample")
         self.netip = NetIp(self.store)
-        self.session = None                    # KotakSession (paper / live)
+        self.session = None                    # AngelOneSession (paper / live)
         self.vault = AccountVault(Path(cfg.data_dir) / "accounts.enc", env)
         self.accounts: dict[str, dict] = {}    # all connected accounts: aid -> {id, label, ucc}
-        self.sessions: dict[str, Any] = {}     # aid -> KotakSession
-        self.gateways: dict[str, Any] = {}     # aid -> KotakGateway / SimBroker
+        self.sessions: dict[str, Any] = {}     # single Angel One session, keyed by stable account id
+        self.gateways: dict[str, Any] = {}     # single Angel One gateway / SimBroker
         self.active_account_id: str = ""
         self._fails: dict[str, tuple[int, float]] = {}
         self._journal_loop_on = False
@@ -363,6 +363,8 @@ class Services:
                 feed = AngelOneFeed(sess, self.cfg)
                 feed.start(lambda tick: self.hub.update(Quote(tick.symbol, tick.price, ts=tick.ts.timestamp())))
                 self.feed = feed
+                if not feed.wait_connected(timeout=20.0):
+                    raise RuntimeError("Angel One market WebSocket did not connect within 20 seconds. Check SmartAPI access and network, then retry.")
                 self.hub.attach_feed(feed)
                 self.hub.want("dashboard", [c["key"] for c in self.index_cards()])
                 self._seed_defaults()
@@ -412,7 +414,7 @@ class Services:
             busy = "Stop your running strategies and the Algo first."
             why = {"paper": busy, "live": busy}
         elif self.mode == "live" and self.connected and self._open_exposure():
-            why["paper"] = "You still have open real positions or orders at Kotak. Close them first, otherwise they would be hidden from this screen."
+            why["paper"] = "You still have open real positions or orders at Angel One. Close them first, otherwise they would be hidden from this screen."
         allow_live = (self.env.get("ALLOW_LIVE") or os.environ.get("ALLOW_LIVE") or "yes").strip().lower()
         if allow_live not in ("yes", "true", "1"):
             why.setdefault("live", "Real trading is locked. Add ALLOW_LIVE=yes to your .env file and restart once to unlock it.")
