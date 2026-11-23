@@ -123,6 +123,7 @@ class AngelOneChainProvider:
         while True:
             with self._oi_lock:
                 if not self._oi_queue:
+                    self._oi_thread = None
                     return
                 exchange, token, request_day = self._oi_queue.pop(0)
                 self._oi_queued.discard((request_day, exchange, token))
