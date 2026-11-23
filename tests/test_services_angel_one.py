@@ -21,7 +21,7 @@ def test_live_engine_uses_angel_one_orders_and_shared_quote_hub(monkeypatch):
 
     monkeypatch.setattr(services_module, "Engine", FakeEngine)
     monkeypatch.setattr("terminal.brokers.angel_one.AngelOneOrders", FakeOrders)
-    monkeypatch.setattr("terminal.market.hub.HubEngineFeed", FakeHubFeed)
+    monkeypatch.setattr(services_module, "HubEngineFeed", FakeHubFeed)
 
     svc = Services.__new__(Services)
     svc.mode = "live"
@@ -53,7 +53,7 @@ def test_paper_engine_keeps_simulated_orders_with_angel_one_feed(monkeypatch):
             seen["hub"] = hub
 
     monkeypatch.setattr(services_module, "Engine", FakeEngine)
-    monkeypatch.setattr("terminal.market.hub.HubEngineFeed", FakeHubFeed)
+    monkeypatch.setattr(services_module, "HubEngineFeed", FakeHubFeed)
 
     svc = Services.__new__(Services)
     svc.mode = "paper"
