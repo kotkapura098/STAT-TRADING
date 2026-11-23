@@ -218,11 +218,12 @@ class Services:
             else:
                 out.append({"label": label, "key": f"mcx_fo|{name}", "name": name, "contract": f"{label} FUT",
                             "expiry": None})
-        if out and self.catalog.mcx_loaded():            self._cm_cards = (day, out)
+        if out and self.catalog.mcx_loaded():
+            self._cm_cards = (day, out)
         return out
 
     def start(self) -> None:
-        """Called once at app start. Sample mode comes up immediately; paper/live wait for the Kotak login."""
+        """Called once at app start. Sample mode comes up immediately; paper/live wait for the Angel One login."""
         if self.mode == "sample":
             cat = build_catalog()
             self.catalog.set(cat)
@@ -423,7 +424,7 @@ class Services:
 
     def _leave_sample(self, mode: str) -> None:
         """Turn the invented-data demo into a paper / real terminal: stop the sample world, forget everything it made up,
-        and wait for the Kotak login. Nothing invented stays behind on screen or in the saved price history."""
+        and wait for the Angel One login. Nothing invented stays behind on screen or in the saved price history."""
         from .brokers.angel_one import AngelOneInstruments, AngelOneSession
         feed = self.feed
         if feed is not None:
@@ -437,7 +438,8 @@ class Services:
         self.charts.forget_recent()
         self.chain.set_provider(None)
         self.chain._last_series.clear()
-        self.catalog.set(None)        self.gateway = None
+        self.catalog.set(None)
+        self.gateway = None
         self.connected = False
         self.account = None
         self.journal.ns = None
