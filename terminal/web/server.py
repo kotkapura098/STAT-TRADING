@@ -5,7 +5,7 @@ Security model (single owner per instance, bound to localhost by default):
   * one password -> random session cookie (HttpOnly, SameSite=Strict); sessions are in memory only
   * every state-changing request must carry the custom header `X-Terminal: 1` (a cross-site page cannot send it)
   * the WebSocket checks the cookie AND that the Origin matches the Host (blocks cross-site WebSocket hijacking)
-  * login attempts are rate limited; nothing secret (Kotak keys, MPIN, TOTP secret) is ever sent to the browser
+  * login attempts are rate limited; nothing secret (broker API keys, PIN, TOTP secret) is ever sent to the browser
 """
 from __future__ import annotations
 
