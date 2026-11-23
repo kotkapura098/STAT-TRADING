@@ -4,8 +4,8 @@ Entry point.
 
   python run.py                       # uses `mode:` from config.yaml (default: sample - invented data, no login)
   python run.py --mode sample         # try every page with invented data, nothing to log in to
-  python run.py --mode paper          # REAL Kotak prices, SIMULATED orders
-  python run.py --mode live           # REAL orders (needs ALLOW_LIVE=yes in .env as a second lock)
+  python run.py --mode paper          # REAL Angel One prices, SIMULATED orders
+  python run.py --mode live           # currently locked pending Angel One paper-mode verification
   python run.py --mode replay --scenario put_sl --headless     # algo test on a synthetic day, prints the result
 """
 from __future__ import annotations
@@ -87,8 +87,8 @@ def main() -> int:
         print(f"\nTrades: {len(eng.strategy.trades)} | Day P&L: {eng.risk.realised:+,.2f}")
         return 0
 
-    if cfg.mode == "live" and os.environ.get("ALLOW_LIVE", "").strip().lower() != "yes":
-        print("Refusing to start in LIVE mode: set ALLOW_LIVE=yes in your .env file to confirm real-money trading.")
+    if cfg.mode == "live":
+        print("Refusing to start in LIVE mode: Angel One real-money execution remains locked until paper-mode and broker-runtime verification are complete. Start with --mode paper.")
         return 2
 
     allow_remote = os.environ.get("ALLOW_REMOTE", "").strip().lower() in ("yes", "true", "1") or bool(os.environ.get("RENDER"))

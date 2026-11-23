@@ -5,7 +5,7 @@ QuoteHub: the one place live prices live.
                               ^
               want()/release() from the UI and the algo decide which instruments the feed must subscribe to.
 
-There is exactly ONE connection to Kotak's feed no matter how many pages / browser tabs / algos are open.
+There is exactly ONE connection to the active broker feed no matter how many pages / browser tabs / algos are open.
 """
 from __future__ import annotations
 

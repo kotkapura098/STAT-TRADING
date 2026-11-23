@@ -4,7 +4,7 @@ Chart candles, built from the live prices the terminal receives.
   * 1-minute candles per instrument, aggregated in memory and saved to the local database every few seconds
   * only instruments you have opened in the chart are recorded (the last MAX_KEYS of them), while the terminal is running
   * 5m / 15m / 1h / 1D are made from the 1-minute candles, aligned to the market open (09:15 shares, 09:00 MCX)
-  * there is NO history before the terminal first watched an instrument: Kotak's API offers no history feed
+  * there is NO history before the terminal first watched an instrument: this local recorder does not backfill Angel One historical candles
   * drawings (horizontal and trend lines) are saved per instrument
 
 Times sent to the browser are epoch seconds shifted by +05:30, so the chart axis reads in Indian time.

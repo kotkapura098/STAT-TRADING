@@ -1,15 +1,16 @@
 export interface NetworkStatus {
   ok: boolean;
   app_mode: "sample" | "paper" | "live";
-  mode: "auto" | "own";
+  mode: "angel-one";
   detected: { at: number | null; v4: string; v6: string; errors: { v4: string; v6: string } };
+  outbound_ipv4: string;
   own: { v4: string; v6: string };
   registered: { v4: string; v6: string; at: number } | null;
   expected: string[];
-  source: "" | "account" | "terminal" | "config";
+  source: "" | "environment" | "config" | "unset";
   account_label: string;
-  kotak_sees: string | null;
-  verdict: "ok" | "partial" | "changed" | "mismatch" | "unset" | "unchecked";
+  broker_sees: string | null;
+  verdict: "ok" | "invalid" | "mismatch" | "unset" | "unchecked";
   message: string;
   bad: boolean;
 }

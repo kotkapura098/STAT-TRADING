@@ -1,4 +1,4 @@
-"""Option chain + OI analysis: the arithmetic, the Kotak reply parsing, and the API on the sample world."""
+"""Option chain + OI analysis: the arithmetic, the Angel One provider analysis and API on the sample world."""
 import time
 
 import pytest
@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from conftest import ROOT
 from terminal.config import load_config
-from terminal.market.chain import (ChainUnavailable, KotakChainProvider, Leg, RawChain, analyse, buildup, max_pain)
+from terminal.market.chain import (ChainUnavailable, Leg, RawChain, analyse, buildup, max_pain)
 from terminal.market.hub import QuoteHub
 from terminal.market.models import Quote
 from terminal.services import Services
@@ -66,69 +66,6 @@ def test_analyse_summary_and_window_and_live_overlay():
     narrow = analyse(raw, hub, 1)
     assert [r["strike"] for r in narrow["rows"]] == [24500.0, 24600.0]
     assert narrow["strikes_total"] == 3
-
-
-# ------------------------------------------------------------------------------- Kotak parsing
-class FakeClient:
-    def __init__(self, reply):
-        self.reply, self.calls = reply, []
-
-    def expiries(self, **kw):
-        self.calls.append(("expiries", kw))
-        return {"expiries": ["2026-11-03", "2026-11-10"]}
-
-    def option_chain(self, **kw):
-        self.calls.append(("option_chain", kw))
-        return self.reply
-
-
-class FakeSession:
-    def __init__(self, client):
-        self.client, self.logged_in = client, True
-
-
-DOC_REPLY = {"data": {
-    "common_data": {"mktLot": "65", "multiplier": "1", "unlSymbol": "NIFTY", "exSeg": "nse_fo", "expiryDt": "2026-11-03"},
-    "call": [{"instrument": {"neoSymbol": "nse_fo|71472", "symbol": "NIFTY26NOV24500CE", "optionType": "CE", "strikePrice": "24500", "moneyness": "ATM"},
-              "quote": {"ltp": "166.7500", "prevClose": "99.7000", "volume": 225431505},
-              "openInterest": {"current": 10715645, "previous": 13647630, "change": -2931985, "changePct": -21.48}}],
-    "put": [{"instrument": {"neoSymbol": "nse_fo|71473", "symbol": "NIFTY26NOV24500PE", "optionType": "PE", "strikePrice": "24500", "moneyness": "ATM"},
-             "quote": {"ltp": "80.5", "prevClose": "90", "volume": 1000},
-             "openInterest": {"current": "5000", "previous": "4000"}}]}}
-
-
-def test_kotak_option_chain_reply_is_parsed_per_the_sdk_docs():
-    c = FakeClient(DOC_REPLY)
-    p = KotakChainProvider(FakeSession(c), catalog=None, strike_count=40)
-    raw = p.fetch("NIFTY", "2026-11-03")
-    assert c.calls[0][1] == {"exchange": "nse_fo", "underlying": "NIFTY", "instrument_type": "option", "expiry": "2026-11-03", "count": 200}
-    assert raw.lot == 65 and raw.atm_hint == 24500.0 and raw.spot_key == "nse_cm|Nifty 50"
-    ce, pe = raw.rows[24500.0]["CE"], raw.rows[24500.0]["PE"]
-    assert (ce.key, ce.ltp, ce.prev_close, ce.oi, ce.oi_prev) == ("nse_fo|71472", 166.75, 99.7, 10715645, 13647630)
-    assert pe.oi == 5000 and pe.oi_prev == 4000
-    assert p.expiries("NIFTY") == ["2026-11-03", "2026-11-10"]
-    assert FakeClient(None) and c.calls[-1][1]["exchange"] == "nse_fo"
-    assert KotakChainProvider(FakeSession(FakeClient(DOC_REPLY)), None)._exchange("SENSEX") == "bse_fo"
-
-
-@pytest.mark.parametrize("reply,needle", [
-    ({"error": [{"message": "Invalid session"}]}, "Invalid session"),
-    ({"rateLimit": {"Retry-After": "60"}}, "rate-limiting"),
-    ({"data": {"common_data": {}, "call": [], "put": []}}, "empty option chain"),
-    ("garbage", "unreadable"),
-])
-def test_kotak_errors_become_readable_messages(reply, needle):
-    p = KotakChainProvider(FakeSession(FakeClient(reply)), None)
-    with pytest.raises(ChainUnavailable) as e:
-        p.fetch("NIFTY", None)
-    assert needle in str(e.value)
-
-
-def test_not_logged_in_is_reported_not_crashed():
-    s = FakeSession(FakeClient(DOC_REPLY))
-    s.logged_in = False
-    with pytest.raises(ChainUnavailable, match="Not connected"):
-        KotakChainProvider(s, None).fetch("NIFTY", None)
 
 
 # ------------------------------------------------------------------------------------------ API
@@ -236,81 +173,6 @@ def test_a_name_without_options_is_refused_with_a_message(env):
     svc, c = env
     r = c.get("/api/chain", params={"underlying": "WIPRO"}).json()
     assert r["ok"] is False and "no options" in r["error"] and "WIPRO" in r["error"]
-
-
-def test_kotak_fo_list_search_and_check(monkeypatch):
-    import pandas as pd
-    from terminal.market.catalog import KotakCatalog, LazyCatalog
-    fo = pd.DataFrame({
-        "psymbol": [1, 2, 3, 4, 5, 6], "ptrdsymbol": ["RELIANCE26NOV1200CE", "RELIANCE26NOV1200PE", "RELIANCE26NOVFUT", "M&M26NOV3000CE", "TCS26NOV3000CE", "NIFTY26NOV24500CE"],
-        "psymbolname": ["RELIANCE", "RELIANCE", "RELIANCE", "M&M", "TCS", "NIFTY"], "poptiontype": ["CE", "PE", "XX", "CE", "CE", "CE"],
-        "pexpirydate": [0] * 6, "dstrikeprice": [120000, 120000, 0, 300000, 300000, 2450000], "llotsize": [500, 500, 500, 350, 175, 75], "dticksize": [5] * 6})
-    cm = pd.DataFrame({"psymbol": [10, 11, 12], "ptrdsymbol": ["RELIANCE-EQ", "TCS-EQ", "M&M-EQ"], "psymbolname": ["RELIANCE", "TCS", "M&M"],
-                       "pdesc": ["RELIANCE INDUSTRIES LTD", "TATA CONSULTANCY SERV LT", "MAHINDRA & MAHINDRA LTD"], "pgroup": ["EQ"] * 3, "dticksize": [5] * 3})
-
-    class Ins:
-        def _load(self, seg):
-            return {"nse_fo": fo, "nse_cm": cm}[seg]
-    cat = KotakCatalog(Ins())
-    assert cat.fo_names() == {"RELIANCE": 500, "M&M": 350, "TCS": 175, "NIFTY": 75}       # futures-only rows are not an options underlying
-    cat._df("nse_cm")                                                                      # the cash list is loaded: company names appear
-    assert cat.fo_underlyings("rel") == [{"name": "RELIANCE", "label": "RELIANCE INDUSTRIES LTD", "lot": 500}]
-    assert [x["name"] for x in cat.fo_underlyings("mahindra")] == ["M&M"]                  # by company name
-    assert cat.fo_underlyings("zz") == []
-    p = KotakChainProvider(FakeSession(FakeClient(DOC_REPLY)), LazyCatalog())
-    lazy = p.cat
-    lazy.set(cat)
-    out = p.search("rel")
-    assert [(x["name"], x["kind"]) for x in out] == [("RELIANCE", "stock")]
-    nif = p.search("nif")
-    assert nif[0]["name"] == "NIFTY" and nif[0]["kind"] == "index" and len([x for x in nif if x["name"] == "NIFTY"]) == 1   # an index is listed once
-    p.check("RELIANCE")
-    p.check("BANKNIFTY")
-    with pytest.raises(ChainUnavailable, match="not in Kotak's F&O list"):
-        p.check("WIPRO")
-    # the stock's chain call goes to the F&O segment with the stock's name, and its spot is the cash instrument
-    c = FakeClient(DOC_REPLY)
-    sp = KotakChainProvider(FakeSession(c), cat)
-    cat.register(__import__("terminal.market.models", fromlist=["Instrument"]).Instrument("nse_cm|2885", "nse_cm", "2885", "RELIANCE-EQ", "RELIANCE", "EQ"))
-    raw = sp.fetch("RELIANCE", None)
-    assert c.calls[0][1]["underlying"] == "RELIANCE" and c.calls[0][1]["exchange"] == "nse_fo" and c.calls[0][1]["instrument_type"] == "option"
-
-
-# ------------------------------------------------------------------------------------ every strike, not just 40
-class PickyClient(FakeClient):
-    """Refuses big counts the way a backend with a smaller limit might."""
-    def __init__(self, reply, max_count):
-        super().__init__(reply)
-        self.max_count = max_count
-
-    def option_chain(self, **kw):
-        self.calls.append(("option_chain", kw))
-        if kw["count"] > self.max_count:
-            return {"error": [{"message": "count too large"}]}
-        return self.reply
-
-
-def test_kotak_is_asked_for_the_whole_chain_and_falls_back_to_smaller_counts():
-    c = PickyClient(DOC_REPLY, 100)
-    p = KotakChainProvider(FakeSession(c), catalog=None)
-    p.fetch("NIFTY", "2026-11-03")
-    assert [x[1]["count"] for x in c.calls if x[0] == "option_chain"] == [200, 100]      # 200 refused, 100 accepted
-    p.fetch("NIFTY", "2026-11-03")
-    assert [x[1]["count"] for x in c.calls if x[0] == "option_chain"][-1] == 100 and len(c.calls) == 3   # remembered: no retry of 200
-    low = PickyClient(DOC_REPLY, 40)
-    KotakChainProvider(FakeSession(low), catalog=None).fetch("NIFTY", None)
-    assert [x[1]["count"] for x in low.calls] == [200, 100, 40]
-    never = PickyClient(DOC_REPLY, 0)
-    with pytest.raises(ChainUnavailable, match="count too large"):
-        KotakChainProvider(FakeSession(never), catalog=None).fetch("NIFTY", None)
-
-
-def test_a_rate_limit_is_not_mistaken_for_a_count_problem():
-    c = FakeClient({"rateLimit": {"x": 1}})
-    p = KotakChainProvider(FakeSession(c), catalog=None)
-    with pytest.raises(ChainUnavailable, match="rate-limiting"):
-        p.fetch("NIFTY", None)
-    assert len(c.calls) == 1                                                            # stopped at once, no smaller retries
 
 
 def test_window_trims_only_the_display_while_the_numbers_use_every_strike(env):

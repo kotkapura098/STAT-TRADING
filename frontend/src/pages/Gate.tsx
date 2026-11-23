@@ -51,9 +51,9 @@ export function LoginPage() {
   );
 }
 
-/** Shown in place of every page until the Kotak session is established (paper and live modes). */
+/** Shown in place of every page until the Angel One session is established (paper mode). */
 export function ConnectGate() {
-  useTitle("Connect to Kotak");
+  useTitle("Connect to Angel One");
   const s = useSession();
   const { data, reload } = usePoll<AccountsResp>("/accounts", 4000);
   const [pick, setPick] = useState("");
@@ -85,15 +85,15 @@ export function ConnectGate() {
     <div className="gate" style={{ minHeight: "60vh", background: "none" }}>
       <form className="panel gate-card" onSubmit={submit}>
         <div>
-          <h1>Connect to Kotak Neo</h1>
+          <h1>Connect to Angel One</h1>
           <p className="hint" style={{ marginTop: 6 }}>
-            Choose the account to trade with. Its saved details are used; you only type the 6-digit code from your authenticator app, once a day.
+            Choose your saved Angel One account. Its encrypted API Key, Client Code and PIN are used; enter the current 6-digit TOTP if no TOTP secret is saved.
           </p>
         </div>
         {data && !data.readable && <div className="notice bad" role="alert">{data.problem}</div>}
         {data && data.readable && !rows.length && (
           <div className="notice">
-            No account is saved yet. <a href="/settings" onClick={(e) => { e.preventDefault(); navigate("/settings"); }}>Add your Kotak Neo account in Settings</a> (token, client ID, mobile, MPIN), then come back here.
+            No Angel One account is saved yet. <a href="/settings" onClick={(e) => { e.preventDefault(); navigate("/settings"); }}>Add your Angel One account in Settings</a> (API Key, Client Code, PIN and optional TOTP secret), then come back here.
           </div>
         )}
         {rows.length > 0 && (
@@ -101,7 +101,7 @@ export function ConnectGate() {
             <label htmlFor="acct">Account</label>
             <select id="acct" className="select" value={chosen?.id ?? ""} onChange={(e) => { setPick(e.target.value); setSure(false); }}>
               {rows.length > 1 && !chosen && <option value="">Choose an account…</option>}
-              {rows.map((a) => <option key={a.id} value={a.id}>{a.label} · client {a.ucc}</option>)}
+              {rows.map((a) => <option key={a.id} value={a.id}>{a.label} · client {a.client_code}</option>)}
             </select>
             <span className="hint"><a href="/settings" onClick={(e) => { e.preventDefault(); navigate("/settings"); }}>Add or edit accounts</a></span>
           </div>
@@ -114,10 +114,10 @@ export function ConnectGate() {
         )}
         {chosen?.has_totp_secret && <span className="hint">The code is made from the TOTP secret saved for this account.</span>}
         {live && chosen && (
-          <label className="check"><input type="checkbox" checked={sure} onChange={(e) => setSure(e.target.checked)} /><span><b>LIVE mode.</b> Orders placed in this terminal will be REAL orders on <b>{chosen.label}</b> (client {chosen.ucc}).</span></label>
+          <div className="notice bad">Live order placement is locked pending Angel One broker verification. Switch to Paper mode; orders will be simulated.</div>
         )}
         {err && <div className="err" role="alert">{err}</div>}
-        <button className="btn primary" style={{ height: 38 }} disabled={busy || !chosen || (!chosen.has_totp_secret && code.length < 6) || (live && !sure)}>{busy ? "Connecting…" : "Connect"}</button>
+        <button className="btn primary" style={{ height: 38 }} disabled={busy || !chosen || (!chosen.has_totp_secret && code.length < 6) || live}>{busy ? "Connecting…" : "Connect"}</button>
       </form>
     </div>
   );

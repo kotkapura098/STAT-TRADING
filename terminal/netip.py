@@ -1,21 +1,10 @@
 """
-Static IP handling.
+Angel One static outbound-IP validation.
 
-Kotak (under SEBI's rules for API trading) accepts orders only from the IP address you registered in its API dashboard.
-The address has to be the same in two places: registered with Kotak, and the one Kotak actually sees when this terminal
-connects. This module covers the terminal's side of that, in two ways the user can choose between:
-
-  auto  The terminal finds the public IP address (IPv4 and IPv6) of this computer's internet connection and shows it, so
-        you can register it in Kotak. You then press "I registered it" and the terminal remembers which address(es)
-        you registered. This only works for as long as your provider keeps giving you the same address.
-  own   You bought a static IP (or run the terminal on a server that has one). You type it in here (IPv4 and/or IPv6) and
-        register the same one with Kotak.
-
-The one fact that matters is what Kotak sees at login (`session.my_ip`). It is compared with the addresses you registered
-here, in live mode, before any order can be sent. Finding the IP needs a third-party "what is my IP" service; it is only
-used to show you the address and to notice when it changed - it can never make an order go out or be blocked by itself.
-
-Everything here is best effort and never raises into the trading path.
+For self-hosted client-generated algo orders, SmartAPI requires a registered primary
+static IPv4 address and permits an optional secondary backup. The application detects
+its outbound IPv4 (including HTTPS proxy egress when configured) and checks it against
+ANGEL_STATIC_IP before place, modify or cancel requests.
 """
 from __future__ import annotations
 
@@ -49,7 +38,7 @@ class NetIpError(ValueError):
 
 # ----------------------------------------------------------------------------------------------------- parsing
 def to_ip(text) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
-    """Parse one IP address as typed or as Kotak reports it (brackets, a %zone, or ::ffff:1.2.3.4 are tolerated)."""
+    """Parse one IP address as typed or as broker reports it (brackets, a %zone, or ::ffff:1.2.3.4 are tolerated)."""
     s = str(text or "").strip().strip("[]").split("%", 1)[0]
     ip = ipaddress.ip_address(s)                       # ValueError if it is not an IP
     if ip.version == 6 and ip.ipv4_mapped is not None:
@@ -87,12 +76,31 @@ def parse_ips(text, *, public_only: bool = False, what: str = "static IP") -> li
         except ValueError:
             raise NetIpError(f"'{p}' is not a valid IP address. The {what} looks like 49.36.10.20 (IPv4) or 2401:4900:1c2a::17 (IPv6).") from None
         if public_only and not ip.is_global:
-            raise NetIpError(f"{ip} is not a public internet address ({_why_not_public(ip)}). Kotak needs the public {what} - "
+            raise NetIpError(f"{ip} is not a public internet address ({_why_not_public(ip)}). broker needs the public {what} - "
                              f"the one the internet sees, not the address inside your home network.")
         s = str(ip)
         if family(s) in [family(o) for o in out]:
             raise NetIpError(f"Enter at most one IPv4 and one IPv6 address for the {what}.")
         out.append(s)
+    return out
+
+
+def parse_public_ipv4_list(text, *, what: str = "Angel One static IPv4") -> list[str]:
+    """Parse the primary and optional secondary public IPv4 egress addresses."""
+    parts = [p for p in re.split(r"[,;\s]+", str(text or "").strip()) if p]
+    out: list[str] = []
+    for part in parts:
+        try:
+            ip = ipaddress.ip_address(part)
+        except ValueError as exc:
+            raise NetIpError(f"'{part}' is not a valid {what} address.") from exc
+        if ip.version != 4 or not ip.is_global:
+            raise NetIpError(f"'{part}' must be a public IPv4 address.")
+        value = str(ip)
+        if value not in out:
+            out.append(value)
+    if len(out) > 2:
+        raise NetIpError("Angel One SmartAPI supports a primary and optional secondary static IP; configure no more than two addresses.")
     return out
 
 
@@ -193,7 +201,7 @@ class NetIp:
     def confirm_registered(self, v4: bool, v6: bool) -> dict:
         """The user says they registered the address(es) shown. The address recorded is the one detected right now, by the terminal itself."""
         if not (v4 or v6):
-            raise NetIpError("Tick the address(es) you registered in Kotak.")
+            raise NetIpError("Tick the address(es) you registered in broker.")
         d = self.detect(force=True)
         pol = self.policy()
         reg = {"v4": "", "v6": "", "at": self._clock()}
@@ -241,7 +249,7 @@ class NetIp:
 
     # ------------------------------------------------------------------------- policy
     def expected(self, account_ip: str = "", config_ip: str = "") -> tuple[list[str], str]:
-        """The addresses Kotak must see, and where they come from: 'account', 'terminal' or 'config' ('' = nothing set)."""
+        """The addresses broker must see, and where they come from: 'account', 'terminal' or 'config' ('' = nothing set)."""
         ips = _loose(account_ip)
         if ips:
             return ips, "account"
@@ -259,17 +267,17 @@ class NetIp:
         """Text explaining why an order-sending session must not start, or None. Used at live connect and before the algo starts."""
         seen = (seen or "").strip() if isinstance(seen, str) else seen
         if not seen:
-            return None                                            # Kotak did not tell us; Kotak itself will reject a wrong IP
+            return None                                            # broker did not tell us; broker itself will reject a wrong IP
         exp, src = self.expected(account_ip, config_ip)
         if not exp or covers(exp, seen):
             return None
         where = {"account": f"the static IP saved for '{label}'" if label else "the static IP saved for this account",
                  "terminal": "the IP you registered in Settings, Static IP", "config": "static_ip in config.yaml"}[src]
         shown = " or ".join(exp)
-        base = f"Kotak sees this computer as {seen}, but {where} is {shown}. Orders from a different IP are rejected by Kotak. "
+        base = f"broker sees this computer as {seen}, but {where} is {shown}. Orders from a different IP are rejected by broker. "
         d = self.last()
         if src == "terminal" and self.policy()["mode"] == "auto" and any(same_ip(seen, d[f]) for f in FAMILIES):
-            return base + "Your internet address has changed since you registered it. Register the new one in Kotak (Trade API, API Dashboard) and press 'I registered it' in Settings, Static IP."
+            return base + "Your internet address has changed since you registered it. Register the new one in broker (Trade API, API Dashboard) and press 'I registered it' in Settings, Static IP."
         if src == "terminal" and self.policy()["mode"] == "own":
             return base + "This computer is not going out through your static IP. Run the terminal from the computer or server that has it."
         return base + "Run the terminal from the registered computer, or update the IP."
@@ -285,7 +293,7 @@ class NetIp:
             "detected": {"at": d["at"] or None, "v4": d["v4"], "v6": d["v6"], "errors": d["err"]},
             "own": pol["own"], "registered": pol["registered"] if pol["registered"]["at"] else None,
             "expected": exp, "source": src, "account_label": account_label if src == "account" else "",
-            "kotak_sees": norm(seen) or None, "verdict": verdict, "message": message,
+            "broker_sees": norm(seen) or None, "verdict": verdict, "message": message,
             "bad": verdict in ("changed", "mismatch"),
         }
 
@@ -293,26 +301,26 @@ class NetIp:
         seen_n = norm(seen)
         if not exp:
             if mode == "live":
-                return "unset", "No static IP is set up. Kotak rejects orders from an address you have not registered with it. Set one up below before you trade."
+                return "unset", "No static IP is set up. broker rejects orders from an address you have not registered with it. Set one up below before you trade."
             return "unset", "No static IP is set up yet. Do this before you go live: pick one of the two options below."
         who = {"account": "the account's saved IP", "terminal": "your registered IP", "config": "the IP in config.yaml"}[src]
-        if seen_n:                                                  # the one test that counts: what Kotak itself sees
+        if seen_n:                                                  # the one test that counts: what broker itself sees
             if covers(exp, seen_n):
-                return "ok", f"Kotak sees this computer as {seen_n}, which is {who}."
-            return "mismatch", f"Kotak sees this computer as {seen_n}, but {who} is {' or '.join(exp)}. Orders would be rejected."
+                return "ok", f"broker sees this computer as {seen_n}, which is {who}."
+            return "mismatch", f"broker sees this computer as {seen_n}, but {who} is {' or '.join(exp)}. Orders would be rejected."
         found = [d[f] for f in FAMILIES if d[f]]
         if not found:
-            return "unchecked", "Could not find this computer's public IP just now (offline, or the lookup services are blocked). Kotak's own check happens when you connect."
+            return "unchecked", "Could not find this computer's public IP just now (offline, or the lookup services are blocked). broker's own check happens when you connect."
         bad = [ip for ip in found if any(family(e) == family(ip) for e in exp) and not covers(exp, ip)]
         if bad:
             if src == "terminal" and pol["mode"] == "auto":
-                return "changed", f"This connection's IP is now {' and '.join(bad)}, not {' or '.join(exp)} as registered. Register the new address in Kotak and confirm it here, or orders will be rejected."
+                return "changed", f"This connection's IP is now {' and '.join(bad)}, not {' or '.join(exp)} as registered. Register the new address in broker and confirm it here, or orders will be rejected."
             return "mismatch", f"This connection's IP is {' and '.join(bad)}, but {who} is {' or '.join(exp)}. Orders would be rejected until the terminal runs from the registered address."
         extra = [ip for ip in found if not any(family(e) == family(ip) for e in exp)]
         if extra:
             kind = "IPv6" if family(extra[0]) == "v6" else "IPv4"
-            return "partial", (f"This computer also has the {kind} address {extra[0]}, which is not registered. If Kotak reaches you over {kind}, "
-                               f"it will see that address instead. Register it too, or connect once: Kotak then shows the exact address it sees.")
+            return "partial", (f"This computer also has the {kind} address {extra[0]}, which is not registered. If broker reaches you over {kind}, "
+                               f"it will see that address instead. Register it too, or connect once: broker then shows the exact address it sees.")
         return "ok", "The IP this connection uses matches what you registered."
 
     def alert_text(self, st: dict, mode: str) -> str | None:
@@ -336,9 +344,9 @@ def _loose(text) -> list[str]:
 
 
 def problem_for_config(config_ip: str, seen) -> str | None:
-    """Stand-alone check used when no Services object exists (the plain algo controller): config.yaml's static_ip against what Kotak sees."""
+    """Stand-alone check used when no Services object exists (the plain algo controller): config.yaml's static_ip against what broker sees."""
     exp = _loose(config_ip)
     if not exp or not seen or covers(exp, seen):
         return None
-    return (f"Kotak sees this computer as {seen}, but config.yaml static_ip is {' or '.join(exp)}. "
+    return (f"broker sees this computer as {seen}, but config.yaml static_ip is {' or '.join(exp)}. "
             f"Orders from a different IP are rejected - run the terminal from the registered server.")

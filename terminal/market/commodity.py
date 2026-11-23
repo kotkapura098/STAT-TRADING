@@ -2,7 +2,7 @@
 Commodities (MCX): names, friendly labels, trading hours.
 
 What is KNOWN here comes from public exchange / broker pages (hours, lot sizes in the sample world).
-What is ASSUMED is marked: the live contract list, lot sizes and tick sizes always come from Kotak's own scrip master
+What is ASSUMED is marked: the live contract list, lot sizes and tick sizes always come from Angel One's instrument master
 (segment mcx_fo), never from this file. This file only gives names a human label and groups big / mini / micro.
 """
 from __future__ import annotations
@@ -140,7 +140,7 @@ def session_hm(name: str, day: date) -> tuple[str, str]:
     return f"{OPEN:%H:%M}", f"{c:%H:%M}"
 
 
-BROKER_SQUAREOFF_MIN = 10   # brokers square intraday positions off about this long before the close (Zerodha bulletin, Nov 2026); Kotak's own time may differ
+BROKER_SQUAREOFF_MIN = 10   # brokers square intraday positions off about this long before the close (Zerodha bulletin, Nov 2026); Angel One's own square-off time may differ
 
 
 def status(now: datetime, override: str | None = None) -> dict:

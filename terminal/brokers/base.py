@@ -1,4 +1,4 @@
-"""The three things the engine needs. Kotak, paper and replay all plug into these."""
+"""The three things the engine needs. Angel One, paper and replay all plug into these."""
 from __future__ import annotations
 
 from dataclasses import dataclass

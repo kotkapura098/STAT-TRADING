@@ -117,3 +117,56 @@ def test_sync_from_the_broker_is_idempotent_and_carries_tags(tmp_path):
     t = r["trips"][0]
     assert t["pnl"] == pytest.approx(10 * w.lot) and t["tag"] == "manual" and t["dir"] == "Short"
     assert t["label"].startswith("NIFTY") and r["stats"]["n"] == 1
+
+
+
+def test_builtin_paper_engine_fills_are_saved_in_the_angel_one_journal(tmp_path):
+    from datetime import date, datetime
+    from types import SimpleNamespace
+    from terminal.clock import IST
+    from terminal.journal import Journal
+    from terminal.models import Contract
+    from terminal.store import Store
+
+    store = Store(tmp_path / "journal.db")
+    journal = Journal(store, SimpleNamespace(gateway=lambda: None), "paper")
+    journal.ns = "angel-one:paper"
+    contract = Contract("NIFTY26NOV26000CE", "123", "nse_fo", 26000, "CE",
+                        date(2026, 11, 26), 65)
+    entry = datetime(2026, 11, 23, 9, 20, tzinfo=IST)
+    exit_ = datetime(2026, 11, 23, 10, 5, tzinfo=IST)
+
+    assert journal.record_engine_fill({
+        "event": "entry", "contract": contract, "qty": 65, "price": 100.0,
+        "ts": entry, "name": "NIFTY"
+    }) == 1
+    assert journal.record_engine_fill({
+        "event": "exit", "contract": contract, "qty": 65, "price": 50.0,
+        "ts": exit_, "name": "NIFTY"
+    }) == 1
+
+    trips, held = journal.trips()
+    assert held == []
+    assert len(trips) == 1
+    assert trips[0]["dir"] == "Short"
+    assert trips[0]["qty"] == 65
+    assert trips[0]["pnl"] == 3250.0
+    assert trips[0]["tag"] == "ORB built-in"
+
+
+def test_builtin_engine_fills_are_not_duplicated_into_live_broker_journal(tmp_path):
+    from datetime import date, datetime
+    from types import SimpleNamespace
+    from terminal.clock import IST
+    from terminal.journal import Journal
+    from terminal.models import Contract
+    from terminal.store import Store
+
+    journal = Journal(Store(tmp_path / "live-journal.db"), SimpleNamespace(gateway=lambda: None), "live")
+    journal.ns = "angel-one:live"
+    contract = Contract("NIFTY26NOV26000CE", "123", "nse_fo", 26000, "CE",
+                        date(2026, 11, 26), 65)
+    assert journal.record_engine_fill({
+        "event": "entry", "contract": contract, "qty": 65, "price": 100.0,
+        "ts": datetime(2026, 11, 23, 9, 20, tzinfo=IST), "name": "NIFTY"
+    }) == 0

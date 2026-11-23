@@ -1,7 +1,7 @@
 """
 Candle history for the back-tester.
 
-Kotak only lets you download history for contracts that are still listed, so expired weekly options cannot be fetched
+The local recorder does not backfill expired weekly-option history; it records only instruments subscribed while the terminal is running.
 afterwards. Instead this terminal RECORDS its own one-minute candles (index and index options) while it runs, and keeps
 them in a separate small database (data/candles.db). The back-tester replays your strategy over those recorded days.
 
