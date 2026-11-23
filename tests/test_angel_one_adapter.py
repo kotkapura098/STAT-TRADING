@@ -50,3 +50,65 @@ def test_status_unknown_if_missing_not_false_empty():
     session = SimpleNamespace(require_client=lambda: Client())
     orders = AngelOneOrders(session, SimpleNamespace(), None)
     assert orders.status("missing").state == "UNKNOWN"
+
+
+
+def test_expiry_parser_accepts_supported_master_formats():
+    assert AngelOneInstruments._expiry("25JUN2026") == date(2026, 6, 25)
+    assert AngelOneInstruments._expiry("25-Jun-2026") == date(2026, 6, 25)
+    assert AngelOneInstruments._expiry("2026-06-25") == date(2026, 6, 25)
+    assert AngelOneInstruments._expiry("not-a-date") is None
+
+
+def test_index_subscription_resolves_numeric_master_token():
+    cfg = SimpleNamespace(dashboard_indices=[
+        {"label": "NIFTY 50", "segment": "nse_cm", "token": "Nifty 50"}
+    ])
+    ins = AngelOneInstruments(SimpleNamespace(), cfg)
+    ins._rows = [{
+        "exch_seg": "NSE", "instrumenttype": "AMXIDX",
+        "token": "99926000", "symbol": "Nifty 50", "name": "NIFTY"
+    }]
+    ins._by_key = {"nse_cm|99926000": ins._rows[0]}
+    ins._loaded_at = 9999999999
+    sub = ins.index_subscription("NIFTY 50")
+    assert (sub.segment, sub.token, sub.symbol) == ("nse_cm", "99926000", "INDEX")
+
+
+def test_index_subscription_never_uses_display_label_as_token():
+    cfg = SimpleNamespace(dashboard_indices=[
+        {"label": "NIFTY 50", "segment": "nse_cm", "token": "Nifty 50"}
+    ])
+    ins = AngelOneInstruments(SimpleNamespace(), cfg)
+    ins._rows = []
+    ins._loaded_at = 9999999999
+    with pytest.raises(RuntimeError, match="no verified token"):
+        ins.index_subscription("NIFTY 50")
+
+
+def test_feed_replays_subscriptions_after_reconnect():
+    from terminal.brokers.angel_one import AngelOneFeed
+    feed = AngelOneFeed(SimpleNamespace())
+    feed._subscriptions[("nse_fo", "12345")] = "NIFTY26JUN26000CE"
+    class FakeSocket:
+        def __init__(self):
+            self.calls = []
+        def subscribe(self, *args):
+            self.calls.append(args)
+    ws = FakeSocket()
+    feed._replay_subscriptions(ws)
+    assert ws.calls == [("goldeneagle", 1, [
+        {"exchangeType": 2, "tokens": ["12345"]}
+    ])]
+
+
+def test_feed_normalizes_price_and_routes_tick():
+    from terminal.brokers.angel_one import AngelOneFeed
+    ticks = []
+    feed = AngelOneFeed(SimpleNamespace())
+    feed._subscriptions[("nse_fo", "12345")] = "NIFTY26JUN26000CE"
+    feed._on_tick = ticks.append
+    feed._on_data(None, {"token": "12345", "exchange_type": 2, "last_traded_price": 123450})
+    assert len(ticks) == 1
+    assert ticks[0].symbol == "NIFTY26JUN26000CE"
+    assert ticks[0].price == 1234.5
