@@ -75,9 +75,15 @@ class AngelOneGateway:
         mapped = {"L": "LIMIT", "MKT": "MARKET", "SL": "STOPLOSS_LIMIT", "SL-M": "STOPLOSS_MARKET"}.get(order_type)
         if not mapped:
             raise OrderError("Unsupported order type.")
-        payload = {"variety": "NORMAL", "orderid": str(order_id), "ordertype": mapped,
+        inst = self.cat.get(row.key) if row.key else None
+        if inst is None:
+            raise OrderError("Cannot safely modify this order: its Angel One instrument mapping is unavailable.")
+        product = {"MIS": "INTRADAY", "NRML": "CARRYFORWARD", "CNC": "DELIVERY"}.get(row.product, row.product)
+        payload = {"variety": "NORMAL", "orderid": str(order_id), "tradingsymbol": inst.symbol,
+                   "symboltoken": inst.token, "exchange": SEGMENT_TO_EXCHANGE[inst.segment],
+                   "ordertype": mapped, "producttype": product, "duration": validity,
                    "quantity": str(qty), "price": str(price if order_type in ("L", "SL") else 0),
-                   "triggerprice": str(trigger or 0), "duration": validity}
+                   "triggerprice": str(trigger or 0)}
         _ok(self.client.modifyOrder(payload), "modify order")
 
     def orders(self):
