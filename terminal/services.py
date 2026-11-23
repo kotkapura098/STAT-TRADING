@@ -325,6 +325,8 @@ class Services:
         """Connect the single configured Angel One account and initialise its market feed."""
         if self.mode == "sample":
             return
+        if self.mode == "live":
+            raise RuntimeError("Live Angel One order placement is disabled until the full broker migration passes integration and regression testing. Use Paper mode for account-connection checks.")
         from .brokers.angel_one import AngelOneFeed, AngelOneInstruments, AngelOneSession
         from .market.angel_catalog import AngelOneCatalog
         from .market.angel_chain import AngelOneChainProvider
@@ -413,6 +415,7 @@ class Services:
             why = {"paper": busy, "live": busy}
         elif self.mode == "live" and self.connected and self._open_exposure():
             why["paper"] = "You still have open real positions or orders at Angel One. Close them first, otherwise they would be hidden from this screen."
+        why.setdefault("live", "Angel One live order placement is temporarily disabled until broker integration and regression tests are verified.")
         allow_live = (self.env.get("ALLOW_LIVE") or os.environ.get("ALLOW_LIVE") or "yes").strip().lower()
         if allow_live not in ("yes", "true", "1"):
             why.setdefault("live", "Real trading is locked. Add ALLOW_LIVE=yes to your .env file and restart once to unlock it.")
