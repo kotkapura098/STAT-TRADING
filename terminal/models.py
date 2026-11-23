@@ -33,6 +33,8 @@ class OrderRequest:
     price: float = 0.0
     trigger: float = 0.0
     tag: str = ""
+    product_type: str = "INTRADAY"  # Angel One product mapping; ignored by other broker adapters
+    validity: str = "DAY"
 
 
 @dataclass
