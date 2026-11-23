@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from ..models import OrderError
+from ..models import OrderError, OrderUnknown
 from ..market.models import Instrument
 from ..clock import now_ist
 from .models import Funds, OrderRow, PositionRow, TradeRow
@@ -55,9 +55,11 @@ class AngelOneGateway:
                    "squareoff": "0", "stoploss": "0", "ordertag": (ticket.tag or "GET")[:20]}
         try:
             result = _ok(self.client.placeOrder(payload), "place order")
+        except OrderError:
+            raise
         except Exception as exc:
             # A network failure after submission is ambiguous. Never auto-retry.
-            raise OrderError(f"Angel One order submission outcome is uncertain. Check the broker order book before retrying: {exc}") from None
+            raise OrderUnknown(f"Angel One order submission outcome is uncertain. Check the broker order book before retrying: {type(exc).__name__}") from None
         oid = result.get("orderid") or result.get("order_id")
         if not oid:
             raise OrderError("Angel One returned no order ID. Check the broker order book before retrying.")
