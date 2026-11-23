@@ -343,7 +343,7 @@ class AngelOneOrders:
         return out
 
     def holdings(self) -> list[dict]:
-        data = _ok(self.session.require_client(). holding(), "holdings")
+        data = _ok(self.session.require_client().holding(), "holdings")
         return data.get("data", []) if isinstance(data.get("data"), list) else []
 
     def funds(self) -> dict:
