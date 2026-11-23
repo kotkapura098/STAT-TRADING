@@ -123,13 +123,19 @@ class AngelOneSession:
         client = self.require_client()
         if not self.refresh_token:
             raise RuntimeError("Angel One refresh token is unavailable; reconnect the account.")
-        response = client.generateToken(self.refresh_token)
-        data = _ok(response, "token refresh")
-        self.jwt_token = _bearer_token(data.get("jwtToken") or self.jwt_token)
-        self.refresh_token = str(data.get("refreshToken") or self.refresh_token)
-        self.feed_token = str(client.getfeedToken() or data.get("feedToken") or self.feed_token)
-        if not self.jwt_token or not self.feed_token:
-            raise RuntimeError("Angel One token refresh returned an incomplete session.")
+        try:
+            response = client.generateToken(self.refresh_token)
+            data = _ok(response, "token refresh")
+            jwt_token = _bearer_token(data.get("jwtToken") or self.jwt_token)
+            refresh_token = str(data.get("refreshToken") or self.refresh_token)
+            feed_token = str(client.getfeedToken() or data.get("feedToken") or self.feed_token)
+            if not jwt_token or not feed_token:
+                raise RuntimeError("Angel One token refresh returned an incomplete session.")
+            self.jwt_token, self.refresh_token, self.feed_token = jwt_token, refresh_token, feed_token
+        except Exception as exc:
+            # SmartAPI logs sessions out daily; a failed refresh requires a fresh TOTP login.
+            self.jwt_token = self.feed_token = self.refresh_token = ""
+            raise RuntimeError("Angel One session expired or token refresh failed. Reconnect the account with a current TOTP.") from exc
 
     def ensure_fresh(self, skew_seconds: int = 120) -> None:
         """Refresh the REST/feed tokens shortly before the JWT expires."""
@@ -147,8 +153,8 @@ class AngelOneSession:
             self.refresh()
 
     def require_client(self):
-        if self.client is None:
-            raise RuntimeError("Angel One account is not connected.")
+        if not self.logged_in:
+            raise RuntimeError("Angel One account session is not active. Reconnect with a current TOTP.")
         return self.client
 
     def logout(self) -> None:
