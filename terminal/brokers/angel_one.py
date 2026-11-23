@@ -356,6 +356,10 @@ class AngelOneFeed:
                 SmartWebSocketV2.input_request_dict = {}
                 SmartWebSocketV2.RESUBSCRIBE_FLAG = False
                 s = self.session
+                if not getattr(s, "logged_in", True):
+                    self._connected.clear()
+                    self._stop.wait(5)
+                    continue
                 ensure_fresh = getattr(s, "ensure_fresh", None)
                 if callable(ensure_fresh):
                     ensure_fresh()
