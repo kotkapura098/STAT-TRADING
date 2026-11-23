@@ -29,6 +29,7 @@ def _runtime(mode):
         session=SimpleNamespace(logged_in=True),
         hub=QuoteHub(),
         alerts=SimpleNamespace(notify=lambda *_: None),
+        _ip_problem=lambda: None,
     )
 
 
