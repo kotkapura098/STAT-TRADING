@@ -53,14 +53,11 @@ class ConnectIn(BaseModel):
 
 
 class AccountIn(BaseModel):
-    label: str = Field("", max_length=40)
-    consumer_key: str = Field("", max_length=300)
-    mobile: str = Field("", max_length=24)
-    ucc: str = Field("", max_length=30)
-    mpin: str = Field("", max_length=12)
+    label: str = Field("My Angel One account", max_length=40)
+    api_key: str = Field("", max_length=300)
+    client_code: str = Field("", max_length=30)
+    pin: str = Field("", max_length=8)
     totp_secret: str = Field("", max_length=80)
-    clear_totp_secret: bool = False
-    static_ip: str = Field("", max_length=64)
 
 
 class NetworkIn(BaseModel):
