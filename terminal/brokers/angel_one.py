@@ -441,8 +441,8 @@ class AngelOneOrders:
             "variety": "NORMAL", "tradingsymbol": req.contract.symbol,
             "symboltoken": req.contract.token, "transactiontype": "BUY" if req.side == "B" else "SELL",
             "exchange": SEGMENT_TO_EXCHANGE[req.contract.segment], "ordertype": ordertype,
-            "producttype": getattr(self.cfg, "angel_product_type", "INTRADAY"),
-            "duration": "DAY", "price": str(req.price or 0),
+            "producttype": req.product_type,
+            "duration": req.validity, "price": str(req.price or 0),
             "triggerprice": str(req.trigger or 0), "quantity": str(req.qty),
             "squareoff": "0", "stoploss": "0", "ordertag": (req.tag or "GET")[:20],
         }
