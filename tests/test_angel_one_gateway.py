@@ -295,7 +295,7 @@ def test_individual_order_status_uses_unique_order_id_instead_of_order_book():
     orders._unique_order_ids["OID-1"] = "UNIQUE-1"
     status = orders.status("OID-1")
     assert status.state == "COMPLETE"
-    assert status.filled == 65
+    assert status.filled_qty == 65
     assert status.avg_price == 102.5
 
 
