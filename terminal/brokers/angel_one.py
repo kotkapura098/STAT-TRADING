@@ -133,17 +133,57 @@ class AngelOneInstruments:
                     indexed[f"{segment}|{token}"] = row
             self._rows, self._by_key, self._loaded_at = rows, indexed, time.time()
 
+    @staticmethod
+    def _expiry(value: Any) -> date | None:
+        raw = str(value or "").strip().upper()
+        for fmt in ("%d%b%Y", "%d-%b-%Y", "%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(raw, fmt).date()
+            except ValueError:
+                continue
+        return None
+
     def index_subscription(self, instrument: str) -> Subscription:
-        # Index token aliases are account/instrument-master dependent; require configured token.
+        """Resolve an index's real numeric token from the downloaded Angel One master."""
+        self.load()
         configured = getattr(self.cfg, "dashboard_indices", []) if self.cfg else []
-        for item in configured:
-            if str(item.get("label", "")).upper() == instrument.upper():
-                seg = str(item["segment"]).lower()
-                token = str(item["token"])
-                if seg not in SEGMENT_TO_WS:
-                    break
-                return Subscription(seg, token, "INDEX")
-        raise RuntimeError(f"Configure the Angel One exchange token for index {instrument!r} in dashboard_indices.")
+        item = next((x for x in configured if str(x.get("label", "")).upper() == instrument.upper()), None)
+        if item is None:
+            raise RuntimeError(f"Index {instrument!r} is not configured in dashboard_indices.")
+        segment = str(item.get("segment", "")).lower()
+        exchange = SEGMENT_TO_EXCHANGE.get(segment)
+        if not exchange:
+            raise RuntimeError(f"Unsupported index exchange segment: {segment!r}")
+        hints = {str(item.get("token", "")).strip().upper(), str(item.get("label", "")).strip().upper()}
+        aliases = {
+            "NIFTY 50": {"NIFTY", "NIFTY 50"},
+            "NIFTY BANK": {"BANKNIFTY", "NIFTY BANK"},
+            "NIFTY FIN SERVICE": {"FINNIFTY", "NIFTY FIN SERVICE"},
+            "NIFTY MID SELECT": {"MIDCPNIFTY", "NIFTY MID SELECT"},
+            "INDIA VIX": {"INDIA VIX", "INDIAVIX"},
+            "SENSEX": {"SENSEX"},
+        }
+        hints.update(aliases.get(instrument.upper(), set()))
+        matches = []
+        for row in self._rows:
+            if str(row.get("exch_seg", "")).upper() != exchange:
+                continue
+            if str(row.get("instrumenttype", "")).upper() not in ("AMXIDX", ""):
+                continue
+            token = str(row.get("token", "")).strip()
+            if not token.isdigit():
+                continue
+            symbol = str(row.get("symbol", "")).strip().upper()
+            name = str(row.get("name", "")).strip().upper()
+            if symbol in hints or name in hints or f"{name} {symbol}" in hints:
+                matches.append(row)
+        if not matches:
+            raise RuntimeError(f"Angel One instrument master has no verified token for index {instrument!r} on {exchange}.")
+        # Prefer an exact symbol match; never send the configured display label as a token.
+        matches.sort(key=lambda r: (str(r.get("symbol", "")).upper() not in hints,
+                                    str(r.get("name", "")).upper() not in hints))
+        token = str(matches[0]["token"])
+        return Subscription(segment, token, "INDEX")
 
     def get_row(self, key: str) -> dict | None:
         self.load()
@@ -154,15 +194,7 @@ class AngelOneInstruments:
         if not row:
             raise RuntimeError(f"Instrument {key!r} is not present in the Angel One master.")
         seg, token = key.split("|", 1)
-        expiry_raw = str(row.get("expiry") or "")
-        expiry = None
-        if expiry_raw:
-            for fmt in ("%d%b%Y", "%d-%b-%Y", "%Y-%m-%d"):
-                try:
-                    expiry = datetime.strptime(expiry_raw.upper(), fmt).date()
-                    break
-                except ValueError:
-                    pass
+        expiry = self._expiry(row.get("expiry"))
         opt = str(row.get("opttype") or "").upper()
         if opt not in ("CE", "PE"):
             raise RuntimeError(f"{key} is not an option contract.")
@@ -181,9 +213,8 @@ class AngelOneInstruments:
                 continue
             if str(row.get("name", "")).upper() != instrument.upper():
                 continue
-            try:
-                exp = datetime.strptime(str(row.get("expiry", "")).upper(), "%d%b%Y").date()
-            except ValueError:
+            exp = self._expiry(row.get("expiry"))
+            if exp is None:
                 continue
             if exp >= today:
                 rows.append((exp, row))
