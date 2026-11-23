@@ -66,6 +66,10 @@ class AngelOneSession:
         self.profile: dict = {}
         self.my_ip = ""
 
+    @property
+    def logged_in(self) -> bool:
+        return self.client is not None and bool(self.jwt_token and self.feed_token)
+
     def login(self, totp: str | None = None) -> None:
         if not all((self.api_key, self.client_code, self.pin)):
             raise RuntimeError("Set ANGEL_API_KEY, ANGEL_CLIENT_CODE and ANGEL_PIN in the server environment.")
@@ -169,14 +173,6 @@ class AngelOneInstruments:
         """Resolve an index's real numeric token from the downloaded Angel One master."""
         self.load()
         configured = getattr(self.cfg, "dashboard_indices", []) if self.cfg else []
-        item = next((x for x in configured if str(x.get("label", "")).upper() == instrument.upper()), None)
-        if item is None:
-            raise RuntimeError(f"Index {instrument!r} is not configured in dashboard_indices.")
-        segment = str(item.get("segment", "")).lower()
-        exchange = SEGMENT_TO_EXCHANGE.get(segment)
-        if not exchange:
-            raise RuntimeError(f"Unsupported index exchange segment: {segment!r}")
-        hints = {str(item.get("token", "")).strip().upper(), str(item.get("label", "")).strip().upper()}
         aliases = {
             "NIFTY 50": {"NIFTY", "NIFTY 50"},
             "NIFTY BANK": {"BANKNIFTY", "NIFTY BANK"},
@@ -185,7 +181,19 @@ class AngelOneInstruments:
             "INDIA VIX": {"INDIA VIX", "INDIAVIX"},
             "SENSEX": {"SENSEX"},
         }
-        hints.update(aliases.get(instrument.upper(), set()))
+        wanted = instrument.upper().strip()
+        item = next((x for x in configured
+                     if wanted == str(x.get("label", "")).upper()
+                     or wanted in aliases.get(str(x.get("label", "")).upper(), set())), None)
+        if item is None:
+            raise RuntimeError(f"Index {instrument!r} is not configured in dashboard_indices.")
+        segment = str(item.get("segment", "")).lower()
+        exchange = SEGMENT_TO_EXCHANGE.get(segment)
+        if not exchange:
+            raise RuntimeError(f"Unsupported index exchange segment: {segment!r}")
+        hints = {str(item.get("token", "")).strip().upper(), str(item.get("label", "")).strip().upper()}
+        hints.update(aliases.get(str(item.get("label", "")).upper(), set()))
+        hints.add(wanted)
         matches = []
         for row in self._rows:
             if str(row.get("exch_seg", "")).upper() != exchange:
