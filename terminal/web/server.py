@@ -5,7 +5,7 @@ Security model (single owner per instance, bound to localhost by default):
   * one password -> random session cookie (HttpOnly, SameSite=Strict); sessions are in memory only
   * every state-changing request must carry the custom header `X-Terminal: 1` (a cross-site page cannot send it)
   * the WebSocket checks the cookie AND that the Origin matches the Host (blocks cross-site WebSocket hijacking)
-  * login attempts are rate limited; nothing secret (Kotak keys, MPIN, TOTP secret) is ever sent to the browser
+  * login attempts are rate limited; Angel One credentials remain server-side and are never sent to the browser
 """
 from __future__ import annotations
 
@@ -164,7 +164,6 @@ class NoteIn(BaseModel):
 def create_app(svc: Services, password: str) -> FastAPI:
     if len(password) < 8:
         raise RuntimeError("DASHBOARD_PASSWORD must be set in .env and be at least 8 characters")
-    svc.vault.unlock(password)
     app = FastAPI(title="Golden Eagle Trades", docs_url=None, redoc_url=None, openapi_url=None)
     sessions: dict[str, float] = {}
     fails: dict[str, list[float]] = {}
