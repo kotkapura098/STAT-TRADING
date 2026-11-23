@@ -176,3 +176,24 @@ def test_chain_uses_cached_historical_oi_for_buildup_analysis():
     result = analyse(raw, SimpleNamespace(ltp=lambda key: None, get=lambda key: None), None)
     assert result["rows"][0]["ce"]["oi_chg"] == 5000
     assert result["rows"][0]["ce"]["buildup"] == "Long build-up"
+
+
+
+def test_background_baseline_worker_hydrates_and_persists_contract_oi(tmp_path):
+    from datetime import timedelta
+    from terminal.clock import now_ist
+    provider, client = make_provider()
+    provider.HISTORY_INTERVAL = 0
+    provider._cache_path = tmp_path / "oi-cache.json"
+    prior_day = now_ist().date() - timedelta(days=1)
+    client.getOIData = lambda params: {"status": True, "data": [
+        {"time": f"{prior_day.isoformat()}T15:29:00+05:30", "oi": 54321}
+    ]}
+    row = {"exch_seg": "NFO", "token": "1001"}
+    provider._queue_oi_baselines([(prior_day, row)])
+    worker = provider._oi_thread
+    assert worker is not None
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    assert provider._previous_oi("NFO", "1001") == 54321
+    assert provider._cache_path.exists()
