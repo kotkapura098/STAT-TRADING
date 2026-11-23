@@ -431,8 +431,8 @@ class Services:
         self.journal.ns = None
         self.trading._pos_keys = set()
         self.store.drop_derivative_items()
-        self.session = AngelOneSession(self.env)
-        self._angel_ins = AngelOneInstruments(self.session, self.cfg)
+        self._default_session = AngelOneSession(self.env)
+        self._angel_ins = AngelOneInstruments(self._default_session, self.cfg)
         self.algo.session = self.session
         self.bt_src = "market"
         if self.recorder is None:
@@ -444,8 +444,8 @@ class Services:
         self.alerts.mode = mode
         self.journal.mode = mode
         self._start_ip_monitor()
-        log.warning("left the sample world: now in %s mode, waiting for the Kotak login", mode)
-        self.alerts.notify("info", f"Trading mode is now {'REAL: orders go to your Kotak account' if mode == 'live' else 'PAPER: simulated orders'} (waiting for the Kotak login).")
+        log.warning("left the sample world: now in %s mode, waiting for the Angel One login", mode)
+        self.alerts.notify("info", f"Trading mode is now {'REAL: orders go to your Angel One account' if mode == 'live' else 'PAPER: simulated orders'} (waiting for the Kotak login).")
 
     def _open_exposure(self) -> bool:
         """True when the broker side has open positions or live orders (used before leaving real trading)."""
@@ -498,7 +498,7 @@ class Services:
             return self.mode_info()
 
     def disconnect(self, account_id: str | None = None) -> None:
-        """Log out of Kotak so account(s) can be disconnected. Refused while anything is trading."""
+        """Log out of the Angel One account. Refused while anything is trading."""
         if self.mode == "sample":
             raise RuntimeError("Sample mode has no broker account.")
         with self._connect_lock:
@@ -524,7 +524,7 @@ class Services:
                         sess.logout()
                     except Exception:
                         log.exception("logout %s", lbl)
-                log.info("disconnected from Kotak ('%s')", lbl)
+                log.info("disconnected from Angel One ('%s')", lbl)
 
             if not self.accounts:
                 try:
@@ -541,8 +541,7 @@ class Services:
                 if self.active_account_id not in self.accounts:
                     self.active_account_id = next(iter(self.accounts.keys()))
                 self.connected = True
-                from .market.chain import KotakChainProvider
-                self.chain.set_provider(KotakChainProvider(self.get_valid_kotak_session, self.catalog))
+                self.chain.set_provider(None)
 
     def shutdown(self) -> None:
         self._stopping.set()
