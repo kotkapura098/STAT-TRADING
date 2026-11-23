@@ -395,7 +395,7 @@ class KotakChainProvider:
     def _client(self):
         sess = self._get_session()
         if not sess or not getattr(sess, "logged_in", False) or getattr(sess, "client", None) is None:
-            raise ChainUnavailable("Not connected to Kotak yet.")
+            raise ChainUnavailable("Not connected to the broker yet.")
         return sess.client
 
     @staticmethod
@@ -557,12 +557,12 @@ class ChainService:
     def search(self, q: str, limit: int = 12) -> list[dict]:
         """Any underlying that has options (indices and F&O stocks) whose name starts with, or whose company name contains, q."""
         if not self.provider:
-            raise ChainUnavailable("Not connected to Kotak yet.")
+            raise ChainUnavailable("Not connected to the broker yet.")
         return self.provider.search(q, limit) if q.strip() and hasattr(self.provider, "search") else []
 
     def expiries(self, und: str) -> list[str]:
         if not self.provider:
-            raise ChainUnavailable("Not connected to Kotak yet.")
+            raise ChainUnavailable("Not connected to the broker yet.")
         now = time.time()
         hit = self._exp.get(und)
         if hit and now - hit[0] < 600:
@@ -592,7 +592,7 @@ class ChainService:
     def raw_for(self, und: str, sel: str) -> RawChain:
         """The raw chain for strategies: sel is 'nearest', 'next' or an ISO expiry date."""
         if not self.provider:
-            raise ChainUnavailable("Not connected to Kotak yet.")
+            raise ChainUnavailable("Not connected to the broker yet.")
         exps = self.expiries(und.upper())
         if not exps:
             raise ChainUnavailable(f"No expiries found for {und}.")
@@ -633,7 +633,7 @@ class ChainService:
 
     def get(self, und: str, expiry: str | None, window: int | None) -> dict:
         if not self.provider:
-            raise ChainUnavailable("Not connected to Kotak yet.")
+            raise ChainUnavailable("Not connected to the broker yet.")
         und = und.upper()
         if hasattr(self.provider, "check"):
             self.provider.check(und)
