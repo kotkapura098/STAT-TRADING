@@ -16,7 +16,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .accounts import AccountVault, scrub
+from .angel_accounts import AngelOneAccountVault
 from .alerts import Alerts
 from .backtest import BacktestManager
 from .history import CandleDB, Recorder
@@ -29,7 +29,7 @@ from .engine import Engine
 from .journal import Journal
 from .market.catalog import LazyCatalog
 from .market.charts import ChartService
-from .market.chain import ChainService, KotakChainProvider, SampleChainProvider
+from .market.chain import ChainService, SampleChainProvider
 from .market.hub import HubEngineFeed, QuoteHub
 from .market.models import Instrument
 from .netip import NetIp
@@ -77,10 +77,10 @@ class Services:
         self.charts = ChartService(self.hub, self.store, sample=self.mode == "sample")
         self.netip = NetIp(self.store)
         self.session = None                    # KotakSession (paper / live)
-        self.vault = AccountVault(Path(cfg.data_dir) / "accounts.enc", env)
+        self.vault = AngelOneAccountVault(Path(cfg.data_dir) / "angel-account.enc", env)
         self.accounts: dict[str, dict] = {}    # all connected accounts: aid -> {id, label, ucc}
-        self.sessions: dict[str, Any] = {}     # aid -> KotakSession
-        self.gateways: dict[str, Any] = {}     # aid -> KotakGateway / SimBroker
+        self.sessions: dict[str, Any] = {}     # one Angel One session
+        self.gateways: dict[str, Any] = {}     # one Angel One gateway / SimBroker
         self.active_account_id: str = ""
         self._fails: dict[str, tuple[int, float]] = {}
         self._journal_loop_on = False
@@ -88,7 +88,7 @@ class Services:
         self.feed = None
         self._connected = False
         self._connect_lock = threading.Lock()
-        self._kotak_ins = None
+        self._angel_ins = None
         self.alerts = Alerts(env.get("TELEGRAM_BOT_TOKEN", ""), env.get("TELEGRAM_CHAT_ID", ""), self.mode, cfg.alerts)
         m = cfg.manual
         self.trading = TradingService(
@@ -98,9 +98,9 @@ class Services:
             all_gateways_provider=lambda: self.gateways,
             account_labels_provider=lambda: {aid: a.get("label", aid) for aid, a in self.accounts.items()})
         if self.mode != "sample":
-            from .brokers.kotak import KotakInstruments, KotakSession
-            self._default_session = KotakSession(env)
-            self._kotak_ins = KotakInstruments(self._default_session, cfg)
+            from .brokers.angel_one import AngelOneInstruments, AngelOneSession
+            self._default_session = AngelOneSession(env)
+            self._angel_ins = AngelOneInstruments(self._default_session, cfg)
         else:
             self._default_session = None
         self.algo = Controller(cfg, self._build_engine, self.session, ip_check=self._ip_problem)
