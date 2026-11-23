@@ -386,7 +386,7 @@ class TradingService:
         for aid, gw in gws.items():
             rows = gw.positions()
             if rows is None:
-                continue
+                return {"ok": False, "rows": [], "totals": None, "reason": "broker_unavailable"}
             lbl = self.account_label(aid)
             for r in rows:
                 r.account_id = aid
