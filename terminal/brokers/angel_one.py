@@ -681,8 +681,17 @@ class AngelOneOrders:
                 proxies=getattr(client, "proxies", None) or None,
                 verify=not bool(getattr(client, "disable_ssl", False)),
             )
+            if response.status_code == 403:
+                hook = getattr(client, "session_expiry_hook", None)
+                if callable(hook):
+                    hook()
             response.raise_for_status()
-            return response.json()
+            payload = response.json()
+            if isinstance(payload, dict) and payload.get("error_type") == "TokenException":
+                hook = getattr(client, "session_expiry_hook", None)
+                if callable(hook):
+                    hook()
+            return payload
         details = getattr(client, "individual_order_details", None)
         if callable(details):
             return details(unique_id)
