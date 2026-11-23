@@ -180,3 +180,26 @@ def test_feed_wait_connected_times_out_without_open_callback():
     feed = AngelOneFeed(SimpleNamespace())
     assert feed.wait_connected(timeout=0.001) is False
     feed.stop()
+
+
+
+def test_failed_daily_token_refresh_marks_angel_one_session_disconnected():
+    import pytest
+    from terminal.brokers.angel_one import AngelOneSession
+
+    class Client:
+        def generateToken(self, refresh_token):
+            return {"status": False, "message": "session expired"}
+        def terminateSession(self, client_code):
+            return {"status": True}
+
+    session = AngelOneSession({})
+    session.client = Client()
+    session.jwt_token = "Bearer old-jwt"
+    session.refresh_token = "old-refresh"
+    session.feed_token = "old-feed"
+    with pytest.raises(RuntimeError, match="Reconnect the account"):
+        session.refresh()
+    assert session.logged_in is False
+    with pytest.raises(RuntimeError, match="not active"):
+        session.require_client()
