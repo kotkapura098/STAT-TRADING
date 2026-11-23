@@ -1,9 +1,9 @@
 """
-Option chain + open-interest analysis.
+Option chain + open-interest analysis shared by sample and broker providers.
 
   provider  gives a raw snapshot of one chain (strikes, call/put legs with price and open interest)
               - SampleChainProvider: invented, deterministic OI shape, prices move with the sample feed
-              - KotakChainProvider:  Kotak's option_chain() / expiries() REST calls
+              - AngelOneChainProvider: instrument-master contracts + FULL quote/OI batches\n              - KotakChainProvider: legacy Kotak option_chain() / expiries() REST calls
   service   caches snapshots, overlays the LIVE prices/OI from the quote hub, and derives the analysis:
             ATM, PCR, max pain, largest call/put OI strikes, ATM straddle, per-leg OI build-up label.
 
@@ -395,7 +395,7 @@ class KotakChainProvider:
     def _client(self):
         sess = self._get_session()
         if not sess or not getattr(sess, "logged_in", False) or getattr(sess, "client", None) is None:
-            raise ChainUnavailable("Not connected to Kotak yet.")
+            raise ChainUnavailable("Not connected to a market-data provider yet.")
         return sess.client
 
     @staticmethod
