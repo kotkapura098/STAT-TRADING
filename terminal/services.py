@@ -4,7 +4,7 @@ trading service and the algo controller - according to the mode (sample / paper 
 
   sample  no login. Invented prices, simulated orders. For trying the UI.
   paper   Angel One login. REAL prices, simulated orders.
-  live    Kotak login. REAL prices, REAL orders.
+  live    Angel One login. REAL prices, REAL orders.
 """
 from __future__ import annotations
 
@@ -411,7 +411,7 @@ class Services:
             busy = "Stop your running strategies and the Algo first."
             why = {"paper": busy, "live": busy}
         elif self.mode == "live" and self.connected and self._open_exposure():
-            why["paper"] = "You still have open real positions or orders at Kotak. Close them first, otherwise they would be hidden from this screen."
+            why["paper"] = "You still have open real positions or orders at Angel One. Close them first, otherwise they would be hidden from this screen."
         allow_live = (self.env.get("ALLOW_LIVE") or os.environ.get("ALLOW_LIVE") or "yes").strip().lower()
         if allow_live not in ("yes", "true", "1"):
             why.setdefault("live", "Real trading is locked. Add ALLOW_LIVE=yes to your .env file and restart once to unlock it.")
@@ -423,7 +423,7 @@ class Services:
 
     def _leave_sample(self, mode: str) -> None:
         """Turn the invented-data demo into a paper / real terminal: stop the sample world, forget everything it made up,
-        and wait for the Kotak login. Nothing invented stays behind on screen or in the saved price history."""
+        and wait for the Angel One login. Nothing invented stays behind on screen or in the saved price history."""
         from .brokers.angel_one import AngelOneInstruments, AngelOneSession
         feed = self.feed
         if feed is not None:
