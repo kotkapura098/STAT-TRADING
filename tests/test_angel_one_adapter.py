@@ -112,3 +112,34 @@ def test_feed_normalizes_price_and_routes_tick():
     assert len(ticks) == 1
     assert ticks[0].symbol == "NIFTY26JUN26000CE"
     assert ticks[0].price == 1234.5
+
+
+def test_angel_catalog_maps_master_rows_to_terminal_instruments():
+    from terminal.market.angel_catalog import AngelOneCatalog
+    ins = AngelOneInstruments(SimpleNamespace())
+    ins._rows = [{
+        "exch_seg": "NFO", "token": "123", "symbol": "NIFTY27JUN2626000CE",
+        "name": "NIFTY", "expiry": "25JUN2027", "strike": "2600000",
+        "lotsize": "65", "opttype": "CE", "instrumenttype": "OPTIDX"
+    }]
+    ins._by_key = {"nse_fo|123": ins._rows[0]}
+    ins._loaded_at = 9999999999
+    cat = AngelOneCatalog(ins)
+    inst = cat.get("nse_fo|123")
+    assert inst is not None
+    assert (inst.segment, inst.token, inst.kind, inst.strike, inst.lot) == ("nse_fo", "123", "CE", 26000, 65)
+
+
+def test_angel_catalog_search_returns_only_matching_live_contracts():
+    from terminal.market.angel_catalog import AngelOneCatalog
+    ins = AngelOneInstruments(SimpleNamespace())
+    ins._rows = [
+        {"exch_seg": "NFO", "token": "1", "symbol": "NIFTY25DEC2626000CE", "name": "NIFTY",
+         "expiry": "25DEC2026", "strike": "2600000", "lotsize": "65", "opttype": "CE", "instrumenttype": "OPTIDX"},
+        {"exch_seg": "NFO", "token": "2", "symbol": "BANKNIFTY25DEC2650000PE", "name": "BANKNIFTY",
+         "expiry": "25DEC2026", "strike": "5000000", "lotsize": "30", "opttype": "PE", "instrumenttype": "OPTIDX"}
+    ]
+    ins._by_key = {f"nse_fo|{x['token']}": x for x in ins._rows}
+    ins._loaded_at = 9999999999
+    hits = AngelOneCatalog(ins).search("NIFTY CE")
+    assert [x.token for x in hits] == ["1"]
