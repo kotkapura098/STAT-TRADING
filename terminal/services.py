@@ -231,7 +231,7 @@ class Services:
             self.feed = feed
             self.hub.attach_feed(feed)
             self.chain.set_provider(SampleChainProvider(cat, feed.base, SAMPLE_DERIVS, feed.eq_base))
-            self.gateway = SimBroker(self.hub, self.catalog, self.cfg.manual.paper_capital, self.cfg.data_dir)
+            self.gateways["sample"] = SimBroker(self.hub, self.catalog, self.cfg.manual.paper_capital, self.cfg.data_dir)
             self._seed_defaults(sample=True)
             self.charts.start()
             self.hub.want("dashboard", [c["key"] for c in self.index_cards()])
@@ -439,7 +439,7 @@ class Services:
         self.chain.set_provider(None)
         self.chain._last_series.clear()
         self.catalog.set(None)
-        self.gateway = None
+        self.gateways.clear()
         self.connected = False
         self.account = None
         self.journal.ns = None
@@ -502,8 +502,8 @@ class Services:
             self.alerts.mode = mode
             self.journal.mode = mode
             if self.connected:
-                self.gateway = gateway
-                self.journal.ns = self.vault.journal_namespace(self.account["id"], mode)
+                self.gateways[self.active_account_id] = gateway
+                self.journal.ns = f"angel-one:{mode}"
             log.warning("trading mode switched %s -> %s", old, mode)
             self.alerts.notify("info", f"Trading mode is now {'REAL: orders go to your Angel One account' if mode == 'live' else 'PAPER: simulated orders'}.")
             return self.mode_info()
