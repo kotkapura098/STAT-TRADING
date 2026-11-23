@@ -16,7 +16,7 @@ def test_instrument_master_maps_exchange_and_contract(monkeypatch):
     session = SimpleNamespace()
     instruments = AngelOneInstruments(session)
     instruments._rows = [{
-        "exch_seg": "NFO", "token": "123", "symbol": "NIFTY27JUN26000CE",
+        "exch_seg": "nse_fo", "token": "123", "symbol": "NIFTY27JUN26000CE",
         "name": "NIFTY", "expiry": "25JUN2026", "strike": "2600000",
         "lotsize": "65", "opttype": "CE"
     }]
