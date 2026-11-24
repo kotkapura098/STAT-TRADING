@@ -1,4 +1,4 @@
-# Golden Eagle Trades
+# Golden Eagle Trades [only kotka}
 
 A personal trading terminal for your Kotak Neo account. It runs on **your own computer or server**, with **your own API keys**. Nothing is sent to anyone else.
 
